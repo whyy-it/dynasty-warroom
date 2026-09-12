@@ -43,8 +43,7 @@ p{margin:6px 0}
 .cards{display:grid;gap:12px}
 #main:not(.wide) .cards{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 2px 12px;scrollbar-width:none}
 #main:not(.wide) .cards::-webkit-scrollbar{display:none}
-#main:not(.wide) .cards>.card{flex:0 0 91%;scroll-snap-align:center;min-width:0}
-@media (min-width:700px){#main:not(.wide) .cards>.card{flex:0 0 520px}}
+#main:not(.wide) .cards>.card{flex:0 0 100%;scroll-snap-align:center;min-width:0}
 .card{background:var(--bg2);border:1px solid var(--rule);border-top:3px solid var(--acc,var(--rule));border-radius:12px;padding:12px 14px 10px}
 .card > .head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
 .card h2{margin:0}
@@ -87,7 +86,6 @@ details[open] summary::before{content:'▾'}
 .vs .meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .mid{display:flex;flex-direction:column;align-items:center;gap:1px}
 .vs .bigs{display:flex;align-items:baseline;gap:7px;justify-content:center}
-.vs .lbl{color:var(--acc,var(--dim));font-size:9px;letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace}
 .vs .now{color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace;white-space:nowrap}
 .sc{font-family:'Bebas Neue',Impact,sans-serif;font-size:38px;line-height:.95;font-variant-numeric:tabular-nums}
 .sc.ahead{color:var(--text)} .sc.behind{color:var(--muted)} .sc.won{color:var(--up)} .sc.lost{color:var(--down)}
@@ -99,6 +97,7 @@ details[open] summary::before{content:'▾'}
 .card .duel td.pts{font-family:'JetBrains Mono',monospace;text-align:right;white-space:nowrap;width:44px;padding-top:7px}
 .card .duel td.pts.op{text-align:left}
 .card .duel td.pts.zero{color:var(--dim)}
+.card .duel td.pts.pp{color:var(--muted);font-style:italic}
 .card .duel td.pl{min-width:0}
 .card .duel td.pl .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
 .card .duel td.pl .g{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
@@ -1052,6 +1051,11 @@ function recompute(){
 }
 
 // ============================================================ projected final
+function starterProj(s, lg){
+  if(s.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(s.name)) return dstPoints(lg.scoring.dst, state.teamGame[s.team]);
+  const p = findProjection(normName(s.name), s.team);
+  return p ? scorePlayer(p, lg, state.teamGame) : null;
+}
 // points so far + every 'pre' starter's projection + the upside still on the table for 'in' starters.
 // 'post' and bye starters contribute only what they already scored.
 function projectedFinal(side, lg){
@@ -1062,10 +1066,7 @@ function projectedFinal(side, lg){
     const gs = st ? st.state : null;
     if(gs!=='pre' && gs!=='in') continue;
     pending++;
-    const nn = normName(s.name);
-    let pr = null;
-    if(s.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(s.name)) pr = dstPoints(lg.scoring.dst, state.teamGame[s.team]);
-    else { const p = findProjection(nn, s.team); if(p) pr = scorePlayer(p, lg, state.teamGame); }
+    const pr = starterProj(s, lg);
     if(pr==null) continue;
     resolved++;
     const pts = Number(s.pts)||0;
@@ -1178,35 +1179,41 @@ function render(){
 // ============================================================ rendering — matchup cards
 // App-style matchup layout: score strip up top, my starters lined up against the opponent's
 // row by row with the slot in the middle, bench underneath.
-function duelCell(p, right){
+function duelCell(p, right, lg){
   if(!p) return right ? `<td class="pts op"></td><td class="pl op"></td>` : `<td class="pl"></td><td class="pts"></td>`;
   const st = p.team ? state.sbIdx[p.team] : null; const gl = gameLine(st?.game, p.team);
   const info = `<div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div>`;
-  const pts = `<td class="pts${right?' op':''}${p.pts?'':' zero'}">${fmt(p.pts)}</td>`;
+  // hasn't kicked off yet and no points on the board → show the Vegas-line projection, styled apart
+  let val = p.pts, cls = p.pts ? '' : ' zero';
+  if(lg && state.proj && st?.state==='pre' && !(p.pts>0)){
+    const pr = starterProj(p, lg);
+    if(pr!=null){ val = pr; cls = ' pp'; }
+  }
+  const pts = `<td class="pts${right?' op':''}${cls}">${fmt(val)}</td>`;
   return right ? pts + `<td class="pl op">${info}</td>` : `<td class="pl">${info}</td>` + pts;
 }
-function duelRows(A, B){
+function duelRows(A, B, lg){
   const n = Math.max(A?.length||0, B?.length||0); let rows='';
   for(let i=0;i<n;i++){ const a = A?.[i], b = B?.[i];
-    rows += `<tr>${duelCell(a,false)}<td class="slot">${esc(a?.slot||b?.slot||'')}</td>${duelCell(b,true)}</tr>`; }
+    rows += `<tr>${duelCell(a,false,lg)}<td class="slot">${esc(a?.slot||b?.slot||'')}</td>${duelCell(b,true,lg)}</tr>`; }
   return rows;
 }
 function matchupHTML(c, status){
+  const lg = league(c.id);
   const fin = status.cls==='final' || c.winner==='HOME' || c.winner==='AWAY';
   const useProj = !fin && (c.me?.projected!=null || c.opp?.projected!=null);
-  const val = s => useProj && s.projected!=null ? s.projected : s.points;
   const scls = (s,o) => { if(!s || !o) return '';
     if(fin) return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
-    return val(s)>=val(o) ? 'ahead' : 'behind'; };
+    return s.points>=o.points ? 'ahead' : 'behind'; };
   const tm = (s,op) => `<div class="tm${op?' op':''}">${s ? `<div class="nm">${esc(s.name)}</div><div class="meta">${esc(s.record||'')}${s.owner?' '+esc(s.owner):''}</div>` : `<div class="nm muted">No opponent</div><div class="meta">this week</div>`}</div>`;
   const sub = s => { if(!s || !(s.starters||[]).length) return '';
     const lc = leftCount(s.starters, state.sbIdx);
     return lc.left===0 ? 'done' : `${lc.left} left${lc.live?`, ${lc.live} live`:''}`; };
-  let h = `<div class="vs">${tm(c.me,false)}<div class="mid">${useProj?`<div class="lbl">projected</div>`:''}<div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(val(c.me))}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(val(c.opp)):'—'}</span></div>${useProj?`<div class="now">now ${fmt(c.me.points)} – ${c.opp?fmt(c.opp.points):'—'}</div>`:''}</div>${tm(c.opp,true)}</div>`;
+  let h = `<div class="vs">${tm(c.me,false)}<div class="mid"><div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(c.me.points)}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(c.opp.points):'—'}</span></div>${useProj?`<div class="now">proj ${fmt(c.me.projected??c.me.points)} – ${c.opp?fmt(c.opp.projected??c.opp.points):'—'}</div>`:''}</div>${tm(c.opp,true)}</div>`;
   h += `<div class="subvs"><span>${sub(c.me)}</span><span>${sub(c.opp)}</span></div>`;
-  h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[])}</tbody></table>`;
+  h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[], lg)}</tbody></table>`;
   const bn = c.me.bench||[], bo = c.opp?.bench||[];
-  if(bn.length || bo.length) h += `<details class="benchd" open><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo)}</tbody></table></details>`;
+  if(bn.length || bo.length) h += `<details class="benchd" open><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo, lg)}</tbody></table></details>`;
   return h;
 }
 const ACCENT = {sleeper:'#a78bfa', espn:'#f87171', cbs:'#60a5fa', survivor:'#fbbf24'};
