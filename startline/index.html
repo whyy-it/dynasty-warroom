@@ -670,7 +670,7 @@ async function nflWeek(w){
 // the scoring plays. Finals are cached; live games re-fetch on every refresh.
 const NFL_SUMMARY = NFL_SB.replace('/scoreboard', '/summary');
 function parseBoxscore(sum){
-  const players = {}, dstTd = {};
+  const players = {}, dstTd = {}, dstSaf = {};
   for(const side of (sum.boxscore?.players || [])){
     const team = normAbbr(side.team?.abbreviation);
     for(const cat of (side.statistics || [])){
@@ -689,10 +689,12 @@ function parseBoxscore(sum){
     }
   }
   for(const sp of (sum.scoringPlays || [])){
+    const t = normAbbr(sp.team?.abbreviation); if(!t) continue;
+    if(sp.type?.abbreviation==='SF'){ dstSaf[t] = (dstSaf[t]||0)+1; continue; }
     if(sp.type?.abbreviation!=='TD' || !/(interception|fumble|punt|kick(off)?|blocked[^.]*) return/i.test(sp.text||'')) continue;
-    const t = normAbbr(sp.team?.abbreviation); if(t) dstTd[t] = (dstTd[t]||0)+1;
+    dstTd[t] = (dstTd[t]||0)+1;
   }
-  return {players, dstTd};
+  return {players, dstTd, dstSaf};
 }
 async function loadBox(){
   const started = {};
@@ -712,7 +714,7 @@ function boxActual(e, lg){
   const st = e.team ? state.sbIdx[e.team] : null;
   const box = st && st.game ? state.box[st.game.id] : null;
   if(!box) return null;
-  if(e.pos==='DST') return lg.scoring.dst==='tdonly' ? 6*(box.dstTd[e.team]||0) : null;
+  if(e.pos==='DST') return lg.scoring.dst==='tdonly' ? 6*(box.dstTd[e.team]||0) + 2*((box.dstSaf||{})[e.team]||0) : null;
   const nn = normName(e.name);
   let p = box.players[nn+'|'+e.team];
   if(!p){
@@ -964,8 +966,31 @@ function projectedFinal(side, lg){
   if(resolved < pending/2) return null;     // lines cover too few of the remaining starters — keep the platform's own number
   return total;
 }
+// CBS has no score feed, so the "you" side of that card is the sum of your starters as the NFL
+// box scores settle them; once every starter is final the number is stored so the record works.
+function cbsAutoScore(c){
+  c.auto = null;
+  const v = state.views[c.id]; if(!v) return;
+  const cs = v.entries.filter(e => e.starter && !e.taxi && !e.ir); if(!cs.length) return;
+  let pts=0, proj=0, live=false, done=Object.keys(state.sbIdx).length>0;
+  for(const e of cs){
+    const settled = e.gs!=='pre' && (e.flags||[]).some(f => f==='final' || f==='live');
+    if(settled) pts += e.pts||0;
+    if(settled || e.gs==='pre') proj += e.pts||0;
+    if(e.gs==='in') live = true;
+    const noGame = !e.team || (!state.sbIdx[e.team] && !e.tg);
+    if(e.gs!=='post' && !noGame) done = false;
+  }
+  c.auto = {pts, proj, live, done};
+  if(done && (state.cbs[c.week]?.me == null)){
+    state.cbs[c.week] = {...(state.cbs[c.week]||{}), me: Math.round(pts*10)/10};
+    saveJSON(LS.cbs, state.cbs);
+    c.scores = state.cbs[c.week];
+  }
+}
 function applyProjectedFinals(){
   for(const c of state.cards){
+    if(c.kind==='cbs'){ cbsAutoScore(c); continue; }
     if(c.kind!=='league' || c.error || c.pick) continue;
     const lg = league(c.id); if(!lg) continue;
     for(const side of [c.me, c.opp]){
@@ -1049,12 +1074,14 @@ function renderCard(c){
     return `<article class="card"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">${esc(c.platform)}</span>${pill}</div>${body}</article>`;
   }
   if(c.kind==='cbs'){
-    const s = c.scores||{}; const both = s.me!=null && s.opp!=null;
-    const cls = both ? (s.me>s.opp ? 'ahead' : s.me<s.opp ? 'behind' : '') : '';
-    return `<article class="card cbs"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS, enter the scores</span><span class="pill" id="cbsRec">${cbsRecord()}</span></div>
-      <div class="side ${cls}"><div class="who"><div class="nm">${esc(c.myTeam)}</div><div class="meta">you</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="me" value="${s.me??''}" aria-label="Your score"></div>
-      <div class="side ${both?(s.opp>s.me?'ahead':s.opp<s.me?'behind':''):''}"><div class="who"><div class="nm">${esc(c.opp||'Opponent')}</div><div class="meta">${c.opp?'this week':'add the schedule in Settings'}</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="opp" value="${s.opp??''}" aria-label="Opponent score"></div>
-      <div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Scores save on this phone as you type.</span></div></article>`;
+    const s = c.scores||{}, a = c.auto;
+    const me = s.me!=null ? s.me : a ? a.pts : null;
+    const both = me!=null && s.opp!=null;
+    const meMeta = a ? (a.done ? 'you, final' : a.live ? 'you, live from the box scores' : 'you, from the box scores') : 'you';
+    return `<article class="card cbs"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span><span class="pill" id="cbsRec">${cbsRecord()}</span></div>
+      <div class="side ${both?(me>s.opp?'ahead':me<s.opp?'behind':''):''}"><div class="who"><div class="nm">${esc(c.myTeam)}</div><div class="meta">${meMeta}</div></div><div class="left"></div><div><div class="score">${fmt(me??0)}</div>${a && !a.done ? `<div class="proj">proj ${fmt(a.proj)}</div>` : ''}</div></div>
+      <div class="side ${both?(s.opp>me?'ahead':s.opp<me?'behind':''):''}"><div class="who"><div class="nm">${esc(c.opp||'Opponent')}</div><div class="meta">${c.opp?'this week':'add the schedule in Settings'}</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="opp" value="${s.opp??''}" aria-label="Opponent score"></div>
+      <div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Your score adds itself up from the NFL box scores; type the opponent's from the CBS page.</span></div></article>`;
   }
   if(c.kind==='survivor'){
     const rows = c.rows.map(r => { const n=r.now;
