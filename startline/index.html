@@ -41,10 +41,14 @@ p{margin:6px 0}
 
 /* ---- matchup cards (Week tab and the top of each league tab) */
 .cards{display:grid;gap:12px}
-.card{background:var(--bg2);border:1px solid var(--rule);border-radius:12px;padding:12px 14px 10px}
+#main:not(.wide) .cards{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 2px 12px;scrollbar-width:none}
+#main:not(.wide) .cards::-webkit-scrollbar{display:none}
+#main:not(.wide) .cards>.card{flex:0 0 91%;scroll-snap-align:center;min-width:0}
+@media (min-width:700px){#main:not(.wide) .cards>.card{flex:0 0 520px}}
+.card{background:var(--bg2);border:1px solid var(--rule);border-top:3px solid var(--acc,var(--rule));border-radius:12px;padding:12px 14px 10px}
 .card > .head{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
 .card h2{margin:0}
-.plat{color:var(--dim);font-size:12px}
+.plat{color:var(--acc,var(--dim));font-size:12px;font-weight:600}
 .pill{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 8px;border-radius:999px;background:var(--bg3);color:var(--muted);white-space:nowrap}
 .pill.live{background:rgba(240,135,43,.18);color:var(--accent)}
 .pill.final{background:rgba(134,200,160,.14);color:var(--up)}
@@ -61,6 +65,7 @@ p{margin:6px 0}
 .side.ahead .score{color:var(--text)} .side.behind .score{color:var(--muted)}
 .side.won .score{color:var(--up)} .side.lost .score{color:var(--down)}
 .proj{color:var(--dim);font-size:11px;text-align:right;font-family:'JetBrains Mono',monospace}
+.cbs .side .proj{color:var(--text);font-size:13px;font-weight:600}
 details{margin-top:6px}
 summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0;list-style:none;display:flex;gap:6px;align-items:center}
 summary::-webkit-details-marker{display:none}
@@ -80,7 +85,10 @@ details[open] summary::before{content:'▾'}
 .vs .tm.op{text-align:right}
 .vs .nm{font-weight:600;font-size:15px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.vs .mid{display:flex;align-items:baseline;gap:7px;justify-content:center}
+.vs .mid{display:flex;flex-direction:column;align-items:center;gap:1px}
+.vs .bigs{display:flex;align-items:baseline;gap:7px;justify-content:center}
+.vs .lbl{color:var(--acc,var(--dim));font-size:9px;letter-spacing:.14em;text-transform:uppercase;font-family:'JetBrains Mono',monospace}
+.vs .now{color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace;white-space:nowrap}
 .sc{font-family:'Bebas Neue',Impact,sans-serif;font-size:38px;line-height:.95;font-variant-numeric:tabular-nums}
 .sc.ahead{color:var(--text)} .sc.behind{color:var(--muted)} .sc.won{color:var(--up)} .sc.lost{color:var(--down)}
 .vs .dash{color:var(--dim);font-size:18px}
@@ -560,13 +568,13 @@ const {SLEEPER, ESPN_READS, NFL_SB, PRO_TEAM, POS_NAME, SLOT_NAME, normAbbr, par
 // ============================================================ state and storage
 const LS = {config:'startline.config.v2', cache:'startline.cache.v2', players:'startline.players.v2',
             live:'startline.live.v2', nfl:'startline.nfl.v2', cbs:'startline.cbs.v2',
-            box:'startline.box.v2', snap:'startline.snap.v2', tab:'startline.tab'};
+            box:'startline.box.v2', snap:'startline.snap.v2', pin:'startline.pin.v2', tab:'startline.tab'};
 const PLATFORM = {sleeper:'Sleeper', espn:'ESPN', cbs:'CBS'};
 
 const state = {
   config:null, cache:null, players:null, live:{}, nfl:{}, cbs:{}, box:{}, cards:[], sbIdx:{},
   week:null, autoWeek:null, season:null, credits:null,
-  proj:null, teamGame:{}, views:{}, rostered:{},
+  proj:null, teamGame:{}, views:{}, rostered:{}, lgRost:{},
   tab:null, board:{pos:'ALL', mine:false, q:'', sort:null, dir:-1},
   busy:false, busyMsg:'', error:null, at:null, timer:null,
 };
@@ -750,6 +758,12 @@ function boxActual(e, lg){
   return s.passYd*p.passYds + s.passTd*p.passTd + s.int*p.ints + s.rushYd*p.rushYds + s.rushTd*(p.rushTd+p.retTd)
        + s.rec*p.rec + s.recYd*p.recYds + s.recTd*p.recTd + s.fumble*p.fumLost;
 }
+// League-wide rostered-player sets (every team, not just mine) so the FA pool knows who is taken.
+function rostSet(list){
+  const nt = new Set(), n = new Set();
+  for(const x of list){ if(!x || !x.name) continue; const k = normName(x.name); n.add(k); nt.add(k+'|'+(x.team||'')); }
+  return {at:Date.now(), nt, n};
+}
 async function loadSleeperCard(lg, week){
   const id = lg.leagueId; if(!id) throw new Error('Add the Sleeper league ID in Settings');
   const [meta, users, rosters, matchups] = await Promise.all([
@@ -757,6 +771,7 @@ async function loadSleeperCard(lg, week){
     fetchJSON(`${SLEEPER}/league/${id}/rosters`), fetchJSON(`${SLEEPER}/league/${id}/matchups/${week}`)]);
   const players = state.players ? state.players.byId : {};
   const card = buildSleeperCard({...lg, username:state.config.sleeper.username}, meta, users, rosters, matchups, players, week);
+  state.lgRost[lg.id] = rostSet(rosters.flatMap(x => x.players||[]).map(pid => { const sp = players[pid]; return sp && {name:sp.n, team:sp.t}; }));
   const un = (state.config.sleeper.username||'').toLowerCase();
   const me = users.find(u => (u.username||'').toLowerCase()===un || (u.display_name||'').toLowerCase()===un);
   const r = me && rosters.find(x => x.owner_id===me.user_id || (x.co_owners||[]).includes(me.user_id));
@@ -802,6 +817,9 @@ async function loadEspnCard(lg, week){
   try{ data = await fetchJSON(url); }
   catch(e){ throw new Error(w ? `Worker: ${e.message}` : `ESPN blocked the direct request (${e.message}). Private leagues need the worker URL in Settings.`); }
   const card = buildEspnCard(lg, data, past ? week : null);
+  state.lgRost[lg.id] = rostSet([...(data.teams||[]).flatMap(t => t.roster?.entries||[]),
+    ...(data.schedule||[]).flatMap(s => [s.home, s.away]).flatMap(x => x?.rosterForCurrentScoringPeriod?.entries || x?.rosterForMatchupPeriod?.entries || [])]
+    .map(e => { const p = e.playerPoolEntry?.player||{}; return {name:p.fullName, team:PRO_TEAM[p.proTeamId]||null}; }));
   if(lg.myTeamId) state.live[lg.id] = espnSnapshot(data, lg, past ? week : (data.status?.currentMatchupPeriod || data.scoringPeriodId));
   if(card.me && lg.myTeamId){
     const period = past ? week : (data.status?.currentMatchupPeriod || data.scoringPeriodId);
@@ -852,6 +870,7 @@ async function loadCbsCard(lg, week){
       team: normAbbr(p.pro_team), slot: p.roster_pos==='RB-WR-TE' ? 'FLEX' : (p.roster_pos||null),
       starter: p.status==='Active', pts: p.fpts!=null ? Number(p.fpts) : null,
     }))};
+    state.lgRost[lg.id] = rostSet(ls.teams.flatMap(t => (t.players||[]).map(p => ({name: p.fullname || `${p.firstname||''} ${p.lastname||''}`.trim(), team: normAbbr(p.pro_team)}))));
   }catch(e){ card.liveErr = e.message; }
   return card;
 }
@@ -1173,20 +1192,25 @@ function duelRows(A, B){
   return rows;
 }
 function matchupHTML(c, status){
+  const fin = status.cls==='final' || c.winner==='HOME' || c.winner==='AWAY';
+  const useProj = !fin && (c.me?.projected!=null || c.opp?.projected!=null);
+  const val = s => useProj && s.projected!=null ? s.projected : s.points;
   const scls = (s,o) => { if(!s || !o) return '';
-    if(status.cls==='final' || c.winner==='HOME' || c.winner==='AWAY') return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
-    return s.points>=o.points ? 'ahead' : 'behind'; };
+    if(fin) return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
+    return val(s)>=val(o) ? 'ahead' : 'behind'; };
   const tm = (s,op) => `<div class="tm${op?' op':''}">${s ? `<div class="nm">${esc(s.name)}</div><div class="meta">${esc(s.record||'')}${s.owner?' '+esc(s.owner):''}</div>` : `<div class="nm muted">No opponent</div><div class="meta">this week</div>`}</div>`;
   const sub = s => { if(!s || !(s.starters||[]).length) return '';
     const lc = leftCount(s.starters, state.sbIdx);
-    return `${lc.left===0 ? 'done' : `${lc.left} left${lc.live?`, ${lc.live} live`:''}`}${s.projected!=null?` · proj ${fmt(s.projected)}`:''}`; };
-  let h = `<div class="vs">${tm(c.me,false)}<div class="mid"><span class="sc ${scls(c.me,c.opp)}">${fmt(c.me.points)}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(c.opp.points):'—'}</span></div>${tm(c.opp,true)}</div>`;
+    return lc.left===0 ? 'done' : `${lc.left} left${lc.live?`, ${lc.live} live`:''}`; };
+  let h = `<div class="vs">${tm(c.me,false)}<div class="mid">${useProj?`<div class="lbl">projected</div>`:''}<div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(val(c.me))}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(val(c.opp)):'—'}</span></div>${useProj?`<div class="now">now ${fmt(c.me.points)} – ${c.opp?fmt(c.opp.points):'—'}</div>`:''}</div>${tm(c.opp,true)}</div>`;
   h += `<div class="subvs"><span>${sub(c.me)}</span><span>${sub(c.opp)}</span></div>`;
   h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[])}</tbody></table>`;
   const bn = c.me.bench||[], bo = c.opp?.bench||[];
   if(bn.length || bo.length) h += `<details class="benchd" open><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo)}</tbody></table></details>`;
   return h;
 }
+const ACCENT = {sleeper:'#a78bfa', espn:'#f87171', cbs:'#60a5fa', survivor:'#fbbf24'};
+const accStyle = c => { const a = ACCENT[c.kind==='survivor' ? 'survivor' : c.kind==='cbs' ? 'cbs' : (league(c.id)?.platform||'').toLowerCase()]; return a ? ` style="--acc:${a}"` : ''; };
 function cbsRecord(lg){
   const week = state.week || state.autoWeek || 1; let w=0,l=0,t=0;
   for(const [k,s] of Object.entries(state.cbs)){ if(Number(k)>=week || s.me==null || s.opp==null) continue; if(s.me>s.opp) w++; else if(s.me<s.opp) l++; else t++; }
@@ -1200,13 +1224,13 @@ function renderCard(c){
     else { const status = cardStatus([c.me, c.opp], state.sbIdx);
       pill = status.label ? `<span class="pill ${status.cls}">${status.label}</span>` : (c.bye ? `<span class="pill">BYE</span>` : '');
       body = matchupHTML(c, status); }
-    return `<article class="card"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">${esc(c.platform)}</span>${pill}</div>${body}</article>`;
+    return `<article class="card"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">${esc(c.platform)}</span>${pill}</div>${body}</article>`;
   }
   if(c.kind==='cbs'){
     if(c.me){
       const status = cardStatus([c.me, c.opp], state.sbIdx);
       const pill = status.label ? `<span class="pill ${status.cls}">${status.label}</span>` : '';
-      return `<article class="card cbs"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span>${pill}</div>`
+      return `<article class="card cbs"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span>${pill}</div>`
         + matchupHTML(c, status)
         + `<div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Scores and rosters sync live from CBS.</span></div></article>`;
     }
@@ -1214,7 +1238,7 @@ function renderCard(c){
     const me = s.me!=null ? s.me : a ? a.pts : null;
     const both = me!=null && s.opp!=null;
     const meMeta = a ? (a.done ? 'you, final' : a.live ? 'you, live from the box scores' : 'you, from the box scores') : 'you';
-    return `<article class="card cbs"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span><span class="pill" id="cbsRec">${cbsRecord()}</span></div>
+    return `<article class="card cbs"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span><span class="pill" id="cbsRec">${cbsRecord()}</span></div>
       ${c.liveErr?`<p class="note err">CBS live link: ${esc(c.liveErr)}</p>`:''}
       <div class="side ${both?(me>s.opp?'ahead':me<s.opp?'behind':''):''}"><div class="who"><div class="nm">${esc(c.myTeam)}</div><div class="meta">${meMeta}</div></div><div class="left"></div><div><div class="score">${fmt(me??0)}</div>${a && !a.done ? `<div class="proj">proj ${fmt(a.proj)}</div>` : ''}</div></div>
       <div class="side ${both?(s.opp>me?'ahead':s.opp<me?'behind':''):''}"><div class="who"><div class="nm">${esc(c.opp||'Opponent')}</div><div class="meta">${c.opp?'this week':'add the schedule in Settings'}</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="opp" value="${s.opp??''}" aria-label="Opponent score"></div>
@@ -1226,7 +1250,7 @@ function renderCard(c){
       const gl = n.team ? gameLine(n.game, n.team) : {text:'', cls:''};
       const pick = n.team && r.alive ? `<span class="t">${esc(n.team)}</span>` : (r.alive ? `<input type="text" maxlength="3" placeholder="pick" data-surv="${esc(r.entry)}|${c.week}" aria-label="Week ${c.week} pick for entry ${esc(r.entry)}">` : `<span class="t muted">${esc(n.team||'')}</span>`);
       return `<span class="e">${esc(r.entry)}</span>${pick}<span class="g ${gl.cls}">${esc(gl.text)}</span><span class="st ${st.cls}">${st.t}</span>`; }).join('');
-    return `<article class="card"><div class="head"><h2>${esc(c.name)}</h2><span class="plat">week ${c.week} picks</span>${c.error?`<span class="pill err">ERROR</span>`:''}</div>${c.error?`<p class="note err">${esc(c.error)}</p>`:''}<div class="surv">${rows}</div></article>`;
+    return `<article class="card"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">week ${c.week} picks</span>${c.error?`<span class="pill err">ERROR</span>`:''}</div>${c.error?`<p class="note err">${esc(c.error)}</p>`:''}<div class="surv">${rows}</div></article>`;
   }
   return '';
 }
@@ -1253,6 +1277,35 @@ function statCells(e){
 const STAT_HEAD = `<th class="num">Pass yds / TD</th><th class="num">Rush yds</th><th class="num">Rec / yds</th><th class="num">TD%</th><th class="num">xTD</th>`;
 function statRow(e){ const s=e.stats||{}; return statCells(e)+`<td class="num">${pct(s.pAtd)}</td><td class="num">${fmt(s.xTd,2)}</td>`; }
 function rowClass(e){ return e.pts===0 || (e.flags||[]).some(f=>/^(OUT|IR|PUP|SUS|bye)$/.test(f)) ? 'zero' : ''; }
+
+// Free agents: every projected player the league hasn't rostered, scored under this league's rules.
+// The start/sit read compares each FA to the weakest eligible starter who hasn't kicked off.
+function faGap(v, p, pts){
+  let low = null;
+  for(const x of v.lineup||[]){ const e = x.player;
+    if(!e || e.pts==null) continue;
+    if(e.gs && e.gs!=='pre') continue;
+    if(!((SLOT_ELIG[x.slot]||[]).includes(p.pos))) continue;
+    if(low==null || e.pts<low.pts) low = e; }
+  return low ? {gap: pts-low.pts, vs: low.name} : null;
+}
+function faSection(id, v){
+  if(!state.proj) return `<p class="muted">Pull lines to build the free-agent pool.</p>`;
+  const mine = new Set(v.entries.map(e => e.key));
+  const lr = state.lgRost[id];
+  const pool = Object.values(state.proj)
+    .filter(p => !mine.has(p.key) && !(lr && (lr.nt.has(p.key+'|'+(p.team||'')) || lr.n.has(p.key))))
+    .map(p => ({p, pts: p.leaguePts[id]})).filter(x => x.pts!=null)
+    .sort((a,b) => b.pts-a.pts).slice(0,10);
+  if(!pool.length) return `<p class="muted">Nobody projectable is left on the wire.</p>`;
+  const rows = pool.map(({p,pts}) => {
+    const g = faGap(v, p, pts); const add = !!g && g.gap>0.05;
+    const tg = p.team ? state.teamGame[p.team] : null;
+    return `<tr class="${p.inj&&INACTIVE.test(p.inj)?'zero':''}"><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}${add?' <span class="tag on">ADD?</span>':''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}</td><td>${oppCell(tg)}</td><td class="num proj">${fmt(pts)}</td><td class="num"><span class="gap${add?' close':''}">${g?signed(g.gap)+' vs '+esc(g.vs):'—'}</span></td></tr>`;
+  }).join('');
+  return (lr ? '' : `<p class="muted">League-wide rosters aren't available for this league yet, so some of these may already be owned.</p>`)
+    + `<div class="tbl"><table><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Opp</th><th class="num">Proj</th><th class="num">vs. weakest starter</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
 
 function renderLeagueTab(id){
   const lg = league(id); if(!lg) return '';
@@ -1282,6 +1335,7 @@ function renderLeagueTab(id){
     v.bench.map(e => `<tr class="${rowClass(e)}${e.gap!=null && e.gap>-1.5?' close':''}">${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num">${e.tg?fmt(e.tg.implied,1):'—'}</td><td class="num proj">${fmt(e.pts)}</td><td class="num"><span class="gap${e.gap!=null&&e.gap>-1.5?' close':''}">${e.gap!=null?signed(e.gap)+' vs '+esc(e.gapVs):'—'}</span></td>${statRow(e)}</tr>`).join('') + `</tbody></table></div>`;
   if(v.taxi.length) html += `<h3>Taxi</h3><p class="muted">${v.taxi.map(e=>esc(e.name)).join(', ')}</p>`;
   if(v.ir.length) html += `<h3>IR</h3><p class="muted">${v.ir.map(e=>esc(e.name)).join(', ')}</p>`;
+  html += `<h2>Free agents</h2>` + faSection(id, v);
   html += `<p class="foot">${esc(lg.note||'')} Projections are market consensus across the books returned: yardage and reception lines shifted by their Over/Under prices, passing-TD and anytime-TD prices converted to expected TDs (Poisson), and each team's TD probabilities scaled down to its implied total to strip the vig. Bench rows within 1.5 pts of a starter are highlighted. DST and any kicker without a kicking-points line are heuristics from implied totals. Once a game starts its players are locked: <b>final</b> rows keep their actual score, <b>live</b> rows show points so far, and swap advice only moves players who haven't kicked off. Leagues without a platform score feed (CBS) settle from the NFL box score — TDs, kicker points, and def/ST return TDs.</p>`;
   return html;
 }
@@ -1342,6 +1396,11 @@ function renderSettings(){
     <div class="panel"><h3>Survivor pool</h3>
       <div class="field"><label>Picks (entry: week 1, week 2, …)</label><textarea id="sSurv">${esc(surv)}</textarea><p class="help">Team abbreviations or nicknames. Leave a week blank with a dash.</p></div>
     </div>
+    <div class="panel"><h3>Phone sync</h3>
+      <div class="field"><label>PIN</label><input type="password" id="sPin" autocomplete="off" value="${esc(localStorage.getItem(LS.pin)||'')}" placeholder="4+ characters"><p class="help">Settings are encrypted right here in the browser with this PIN; the worker only ever stores the sealed blob. On the phone: same worker URL, same PIN, then “Load from worker”.</p></div>
+      <div class="actions"><button id="sSyncUp">Save to worker</button><button id="sSyncDown">Load from worker</button></div>
+      <p class="help" id="sSyncMsg">${esc(syncMsg)}</p>
+    </div>
     ${leagueBlocks}
     <div class="panel" style="grid-column:1/-1"><h3>Everything, as JSON</h3><textarea class="json" id="sJSON">${esc(JSON.stringify(c, null, 2))}</textarea><p class="help">Scoring, lineup slots, and new leagues live here. Add a league by copying one of the objects. Applying this replaces the fields above.</p>
       <div class="actions"><button class="primary" id="sSave">Save settings</button><button id="sApplyJSON">Apply JSON</button><button id="sExport">Export config</button><button id="sImport">Import config</button><button id="sClearCache">Clear cached lines</button><button id="sReset">Reset to defaults</button></div>
@@ -1365,6 +1424,60 @@ function saveSettingsForm(){
     else l[k] = el.value.trim();
   });
   saveJSON(LS.config, c); toast('Settings saved'); refreshScores();
+}
+
+// ---- phone sync: the PIN never leaves this page. It derives (PBKDF2) an AES-GCM key that seals
+// the settings JSON in the browser; the worker stores only that ciphertext, filed under a separate
+// SHA-256 id, so neither the worker nor its KV ever sees the PIN or the plaintext.
+let syncMsg = '';
+function setSync(t){ syncMsg = t; const el = $('#sSyncMsg'); if(el) el.textContent = t; }
+const b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function pinKeys(pin){
+  const te = new TextEncoder();
+  const idBuf = await crypto.subtle.digest('SHA-256', te.encode('startline-cfg-v1|id|'+pin));
+  const id = [...new Uint8Array(idBuf)].map(b => b.toString(16).padStart(2,'0')).join('');
+  const mat = await crypto.subtle.importKey('raw', te.encode(pin), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey({name:'PBKDF2', salt:te.encode('startline-cfg-v1'), iterations:150000, hash:'SHA-256'},
+                                            mat, {name:'AES-GCM', length:256}, false, ['encrypt','decrypt']);
+  return {id, key};
+}
+function syncPre(){
+  const pin = ($('#sPin').value||'').trim();
+  if(pin.length<4){ setSync('Use a PIN of at least 4 characters.'); return null; }
+  if(!workerBase()){ setSync('Add the worker URL first — the blob lives on your worker.'); return null; }
+  return pin;
+}
+async function syncUp(){
+  const pin = syncPre(); if(!pin) return;
+  setSync('Encrypting and saving…');
+  try{
+    const {id, key} = await pinKeys(pin);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name:'AES-GCM', iv}, key, new TextEncoder().encode(JSON.stringify(state.config)));
+    const r = await fetch(`${workerBase()}/cfg/${id}`, {method:'PUT', body: b64(iv)+'.'+b64(ct)});
+    if(!r.ok) throw new Error(await r.text());
+    try{ localStorage.setItem(LS.pin, pin); }catch(e){}
+    setSync('Saved. On the phone: same worker URL, same PIN, then “Load from worker”.');
+  }catch(e){ setSync('Save failed: '+e.message); }
+}
+async function syncDown(){
+  const pin = syncPre(); if(!pin) return;
+  setSync('Loading…');
+  try{
+    const {id, key} = await pinKeys(pin);
+    const r = await fetch(`${workerBase()}/cfg/${id}`);
+    if(!r.ok) throw new Error(await r.text());
+    const [ivs, cts] = (await r.text()).split('.');
+    const buf = await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(ivs)}, key, unb64(cts)).catch(() => { throw new Error('could not decrypt — wrong PIN?'); });
+    const cfg = JSON.parse(new TextDecoder().decode(buf));
+    if(!Array.isArray(cfg.leagues)) throw new Error('the saved blob is not a settings object');
+    state.config = {...cfg, worker: cfg.worker || state.config.worker};
+    saveJSON(LS.config, state.config);
+    try{ localStorage.setItem(LS.pin, pin); }catch(e){}
+    setSync('Settings loaded.'); toast('Settings loaded from the worker');
+    render(); refreshScores();
+  }catch(e){ setSync('Load failed: '+e.message); }
 }
 
 // ============================================================ event wiring
@@ -1400,6 +1513,7 @@ function bind(){
     $('#sImport').onclick = () => { const i=document.createElement('input'); i.type='file'; i.accept='.json'; i.onchange = async () => { try{ const c=JSON.parse(await i.files[0].text()); state.config=c; saveJSON(LS.config,c); toast('Config imported'); refreshScores(); }catch(e){ toast('Import failed: '+e.message); } }; i.click(); };
     $('#sClearCache').onclick = () => { localStorage.removeItem(LS.cache); state.cache=null; state.credits=null; recompute(); applyProjectedFinals(); render(); };
     $('#sReset').onclick = () => { if(confirm('Reset every setting and roster to the defaults?')){ localStorage.removeItem(LS.config); state.config=loadConfig(); recompute(); render(); } };
+    $('#sSyncUp').onclick = syncUp; $('#sSyncDown').onclick = syncDown;
     document.querySelectorAll('[data-clearteam]').forEach(b => b.onclick = () => { const lg = league(b.dataset.clearteam); if(lg){ lg.myTeamId=null; delete state.live[lg.id]; saveJSON(LS.config, state.config); refreshScores(); } });
   }
 }
