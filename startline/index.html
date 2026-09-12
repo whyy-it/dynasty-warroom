@@ -98,6 +98,7 @@ details[open] summary::before{content:'▾'}
 .card .duel td.pts.op{text-align:left}
 .card .duel td.pts.zero{color:var(--dim)}
 .card .duel td.pts.pp{color:var(--muted);font-style:italic}
+.card .duel td.pts.lv{color:var(--accent)}
 .card .duel td.pl{min-width:0}
 .card .duel td.pl .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
 .card .duel td.pl .g{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
@@ -1167,6 +1168,7 @@ function duelCell(p, right, lg){
   const info = `<div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div>`;
   // hasn't kicked off yet and no points on the board → show the Vegas-line projection, styled apart
   let val = p.pts, cls = p.pts ? '' : ' zero';
+  if(st?.state==='in') cls += ' lv';
   if(lg && state.proj && st?.state==='pre' && !(p.pts>0)){
     const pr = starterProj(p, lg);
     if(pr!=null){ val = pr; cls = ' pp'; }
@@ -1195,7 +1197,7 @@ function matchupHTML(c, status){
   h += `<div class="subvs"><span>${sub(c.me)}</span><span>${sub(c.opp)}</span></div>`;
   h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[], lg)}</tbody></table>`;
   const bn = c.me.bench||[], bo = c.opp?.bench||[];
-  if(bn.length || bo.length) h += `<details class="benchd" open><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo, lg)}</tbody></table></details>`;
+  if(bn.length || bo.length) h += `<details class="benchd"${window.innerWidth>=700?' open':''}><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo, lg)}</tbody></table></details>`;
   return h;
 }
 const ACCENT = {sleeper:'#a78bfa', espn:'#f87171', cbs:'#60a5fa'};
