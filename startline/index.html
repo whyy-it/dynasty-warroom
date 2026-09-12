@@ -108,14 +108,6 @@ details[open] summary::before{content:'▾'}
 .cbs .side input::placeholder{color:var(--rule2)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:13px;color:var(--muted)}
 .row a{color:var(--accent);text-decoration:none;font-weight:600}
-.surv{display:grid;grid-template-columns:auto auto 1fr auto;gap:6px 12px;align-items:center;font-size:14px}
-.surv .e{font-family:'Bebas Neue',Impact,sans-serif;font-size:22px;color:var(--muted);line-height:1}
-.surv .t{font-weight:700;font-family:'JetBrains Mono',monospace}
-.surv .g{color:var(--muted);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.surv .g.live{color:var(--accent)}
-.surv .st{font-size:12px;font-weight:700;white-space:nowrap}
-.surv .st.win,.surv .st.alive{color:var(--up)} .surv .st.loss,.surv .st.out{color:var(--down)} .surv .st.warn{color:var(--warn)}
-.surv input{font:inherit;width:64px;background:var(--bg3);border:1px solid var(--rule2);border-radius:6px;color:var(--text);padding:4px 6px;text-transform:uppercase;font-family:'JetBrains Mono',monospace}
 .pick{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .note{color:var(--muted);font-size:13px;margin:4px 0}
 .note.err{color:var(--down)}
@@ -190,7 +182,7 @@ textarea.json{min-height:320px}
 <script>
 /* ============================================================
    STARTLINE — one phone screen for the fantasy week.
-   Week tab: live matchups for every league (Sleeper, ESPN, CBS) + survivor pool.
+   Week tab: live matchups for every league (Sleeper, ESPN, CBS).
    League tabs: the same matchup card plus start/sit from Vegas lines (The Odds API).
    Board: every player with props, scored under every league's rules.
    Vanilla JS, no build step. Secrets live in the Cloudflare Worker, never here.
@@ -416,7 +408,6 @@ const DEFAULT_CONFIG = {
       scoring:{ passYd:0.04, passTd:4, int:-1, rushYd:0.1, rushTd:6, recYd:0.1, recTd:6, rec:1, fumble:-2, kMult:1.05, dst:'none' },
       lineup:{ QB:1, RB:2, WR:2, TE:1, FLEX:2, SFLEX:1, K:1, DST:0 }, roster:[] },
   ],
-  survivor: { name:'Survivor pool', entries:{A:['DET'], B:['JAX'], C:['PHI']} },
   refreshSeconds: 60,
 };
 function trimPlayers(raw){
@@ -596,7 +587,6 @@ function loadConfig(){
   cfg.odds = {...cfg.odds, ...(saved.odds||{})};
   cfg.sleeper = {...cfg.sleeper, ...(saved.sleeper||{})};
   cfg.aliases = {...cfg.aliases, ...(saved.aliases||{})};
-  if(saved.survivor && saved.survivor.entries) cfg.survivor = {...cfg.survivor, ...saved.survivor};
   if(saved.refreshSeconds) cfg.refreshSeconds = saved.refreshSeconds;
   if(Array.isArray(saved.leagues) && saved.leagues.length) cfg.leagues = saved.leagues;
   return cfg;
@@ -873,13 +863,6 @@ async function loadCbsCard(lg, week){
   }catch(e){ card.liveErr = e.message; }
   return card;
 }
-async function loadSurvivorCard(week){
-  const entries = state.config.survivor.entries||{}, weekGames = {};
-  const maxW = Math.min(week, Math.max(0, ...Object.values(entries).map(p => p.length)));
-  for(let w=1; w<=maxW; w++){ try{ weekGames[w] = await nflWeek(w); }catch(e){ weekGames[w]=null; } }
-  if(!weekGames[week] && week<=maxW) weekGames[week] = null;
-  return {kind:'survivor', id:'survivor', name:'Survivor pool', week, rows: survivorRows(entries, weekGames, week)};
-}
 function loadCard(lg, week){
   if(lg.platform==='sleeper') return loadSleeperCard(lg, week);
   if(lg.platform==='espn') return loadEspnCard(lg, week);
@@ -899,7 +882,6 @@ async function refreshScores(){
     const jobs = state.config.leagues.map(lg =>
       loadCard(lg, week).then(c => { c.id = lg.id; return c; })
         .catch(e => ({kind:'league', id:lg.id, name:lg.name, platform:PLATFORM[lg.platform]||'', week, error:e.message})));
-    jobs.push(loadSurvivorCard(week).catch(e => ({kind:'survivor', id:'survivor', name:'Survivor pool', week, rows:[], error:e.message})));
     state.cards = await Promise.all(jobs); state.at = Date.now();
     saveJSON(LS.live, state.live);
     recompute(); applyProjectedFinals();
@@ -1216,8 +1198,8 @@ function matchupHTML(c, status){
   if(bn.length || bo.length) h += `<details class="benchd" open><summary>Bench</summary><table class="duel"><tbody>${duelRows(bn, bo, lg)}</tbody></table></details>`;
   return h;
 }
-const ACCENT = {sleeper:'#a78bfa', espn:'#f87171', cbs:'#60a5fa', survivor:'#fbbf24'};
-const accStyle = c => { const a = ACCENT[c.kind==='survivor' ? 'survivor' : c.kind==='cbs' ? 'cbs' : (league(c.id)?.platform||'').toLowerCase()]; return a ? ` style="--acc:${a}"` : ''; };
+const ACCENT = {sleeper:'#a78bfa', espn:'#f87171', cbs:'#60a5fa'};
+const accStyle = c => { const a = ACCENT[c.kind==='cbs' ? 'cbs' : (league(c.id)?.platform||'').toLowerCase()]; return a ? ` style="--acc:${a}"` : ''; };
 function cbsRecord(lg){
   const week = state.week || state.autoWeek || 1; let w=0,l=0,t=0;
   for(const [k,s] of Object.entries(state.cbs)){ if(Number(k)>=week || s.me==null || s.opp==null) continue; if(s.me>s.opp) w++; else if(s.me<s.opp) l++; else t++; }
@@ -1250,14 +1232,6 @@ function renderCard(c){
       <div class="side ${both?(me>s.opp?'ahead':me<s.opp?'behind':''):''}"><div class="who"><div class="nm">${esc(c.myTeam)}</div><div class="meta">${meMeta}</div></div><div class="left"></div><div><div class="score">${fmt(me??0)}</div>${a && !a.done ? `<div class="proj">proj ${fmt(a.proj)}</div>` : ''}</div></div>
       <div class="side ${both?(s.opp>me?'ahead':s.opp<me?'behind':''):''}"><div class="who"><div class="nm">${esc(c.opp||'Opponent')}</div><div class="meta">${c.opp?'this week':'add the schedule in Settings'}</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="opp" value="${s.opp??''}" aria-label="Opponent score"></div>
       <div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Your score adds itself up from the NFL box scores; type the opponent's from the CBS page.</span></div></article>`;
-  }
-  if(c.kind==='survivor'){
-    const rows = c.rows.map(r => { const n=r.now;
-      const st = !r.alive ? {t:`out wk ${r.outWeek}`, cls:'out'} : n.result==='win' ? {t:'won', cls:'win'} : n.result==='live' ? {t:'live', cls:'warn'} : n.result==='tie' ? {t:'tie', cls:'warn'} : n.result==='no game' ? {t:'no game', cls:'warn'} : {t:'alive', cls:'alive'};
-      const gl = n.team ? gameLine(n.game, n.team) : {text:'', cls:''};
-      const pick = n.team && r.alive ? `<span class="t">${esc(n.team)}</span>` : (r.alive ? `<input type="text" maxlength="3" placeholder="pick" data-surv="${esc(r.entry)}|${c.week}" aria-label="Week ${c.week} pick for entry ${esc(r.entry)}">` : `<span class="t muted">${esc(n.team||'')}</span>`);
-      return `<span class="e">${esc(r.entry)}</span>${pick}<span class="g ${gl.cls}">${esc(gl.text)}</span><span class="st ${st.cls}">${st.t}</span>`; }).join('');
-    return `<article class="card"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">week ${c.week} picks</span>${c.error?`<span class="pill err">ERROR</span>`:''}</div>${c.error?`<p class="note err">${esc(c.error)}</p>`:''}<div class="surv">${rows}</div></article>`;
   }
   return '';
 }
@@ -1333,13 +1307,13 @@ function renderLeagueTab(id){
   const rows = v.lineup.map(x => {
     if(!x.player) return `<tr><td class="slot">${x.label}</td><td class="name muted">No eligible player</td><td></td><td></td><td class="num">—</td><td class="num proj">—</td>${STAT_HEAD.replace(/<th[^>]*>.*?<\/th>/g,'<td class="num">—</td>')}</tr>`;
     const e = x.player;
-    return `<tr class="${rowClass(e)}"><td class="slot">${x.label}</td>${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num">${e.tg?fmt(e.tg.implied,1):'—'}</td><td class="num proj">${fmt(e.pts)}</td>${statRow(e)}</tr>`;
+    return `<tr class="${rowClass(e)}"><td class="slot">${x.label}</td>${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num proj">${fmt(e.pts)}</td>${statRow(e)}</tr>`;
   }).join('');
-  html += head + `<div class="tbl"><table><thead><tr><th>Slot</th><th>Player</th><th>Team</th><th>Opp</th><th class="num">Implied</th><th class="num">Proj</th>${STAT_HEAD}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  html += head + `<div class="tbl"><table><thead><tr><th>Slot</th><th>Player</th><th>Team</th><th>Opp</th><th class="num">Proj</th>${STAT_HEAD}</tr></thead><tbody>${rows}</tbody></table></div>`;
   html += `<h2>Bench</h2>`;
   if(!v.bench.length) html += `<p class="muted">Nothing on the bench.</p>`;
-  else html += `<div class="tbl"><table><thead><tr><th>Player</th><th>Team</th><th>Opp</th><th class="num">Implied</th><th class="num">Proj</th><th class="num">vs. lowest starter</th>${STAT_HEAD}</tr></thead><tbody>` +
-    v.bench.map(e => `<tr class="${rowClass(e)}${e.gap!=null && e.gap>-1.5?' close':''}">${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num">${e.tg?fmt(e.tg.implied,1):'—'}</td><td class="num proj">${fmt(e.pts)}</td><td class="num"><span class="gap${e.gap!=null&&e.gap>-1.5?' close':''}">${e.gap!=null?signed(e.gap)+' vs '+esc(e.gapVs):'—'}</span></td>${statRow(e)}</tr>`).join('') + `</tbody></table></div>`;
+  else html += `<div class="tbl"><table><thead><tr><th>Player</th><th>Team</th><th>Opp</th><th class="num">Proj</th><th class="num">vs. lowest starter</th>${STAT_HEAD}</tr></thead><tbody>` +
+    v.bench.map(e => `<tr class="${rowClass(e)}${e.gap!=null && e.gap>-1.5?' close':''}">${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num proj">${fmt(e.pts)}</td><td class="num"><span class="gap${e.gap!=null&&e.gap>-1.5?' close':''}">${e.gap!=null?signed(e.gap)+' vs '+esc(e.gapVs):'—'}</span></td>${statRow(e)}</tr>`).join('') + `</tbody></table></div>`;
   if(v.taxi.length) html += `<h3>Taxi</h3><p class="muted">${v.taxi.map(e=>esc(e.name)).join(', ')}</p>`;
   if(v.ir.length) html += `<h3>IR</h3><p class="muted">${v.ir.map(e=>esc(e.name)).join(', ')}</p>`;
   html += `<h2>Free agents</h2>` + faSection(id, v);
@@ -1361,12 +1335,12 @@ function renderBoard(){
   if(b.pos!=='ALL') rows = rows.filter(p => p.pos===b.pos);
   if(b.mine) rows = rows.filter(p => state.rostered[p.key]);
   if(b.q){ const q = normName(b.q); rows = rows.filter(p => p.key.includes(q) || (p.team||'').toLowerCase()===q); }
-  const val = (p,col) => { if(col.startsWith('pts:')) return p.leaguePts[col.slice(4)]; const s=p.stats; return {name:p.key, pos:p.pos, team:p.team||'', imp:(p.team&&state.teamGame[p.team])?state.teamGame[p.team].implied:null, passYds:s.passYds, passTd:s.passTd, ints:s.ints, rushYds:s.rushYds, rec:s.rec, recYds:s.recYds, pAtd:s.pAtd, xTd:s.xTd}[col]; };
+  const val = (p,col) => { if(col.startsWith('pts:')) return p.leaguePts[col.slice(4)]; const s=p.stats; return {name:p.key, pos:p.pos, team:p.team||'', passYds:s.passYds, passTd:s.passTd, ints:s.ints, rushYds:s.rushYds, rec:s.rec, recYds:s.recYds, pAtd:s.pAtd, xTd:s.xTd}[col]; };
   rows.sort((x,y) => { const a=val(x,b.sort), c=val(y,b.sort); if(a==null&&c==null) return 0; if(a==null) return 1; if(c==null) return -1; return (a<c?-1:a>c?1:0)*b.dir; });
-  const cols = [['name','Player',''],['pos','Pos',''],['team','Team',''],['imp','Implied','num'],['passYds','Pass yds','num'],['passTd','Pass TD','num'],['ints','INT','num'],['rushYds','Rush yds','num'],['rec','Rec','num'],['recYds','Rec yds','num'],['pAtd','TD%','num'],['xTd','xTD','num'], ...lgs.map(l => ['pts:'+l.id, (l.short||l.name)+' pts','num'])];
+  const cols = [['name','Player',''],['pos','Pos',''],['team','Team',''],['passYds','Pass yds','num'],['passTd','Pass TD','num'],['ints','INT','num'],['rushYds','Rush yds','num'],['rec','Rec','num'],['recYds','Rec yds','num'],['pAtd','TD%','num'],['xTd','xTD','num'], ...lgs.map(l => ['pts:'+l.id, (l.short||l.name)+' pts','num'])];
   const th = cols.map(([k,l,c]) => `<th class="sortable ${c}${b.sort===k?' sorted':''}" data-sort="${k}">${esc(l)}${b.sort===k?(b.dir<0?' ▾':' ▴'):''}</th>`).join('') + '<th>Rostered</th>';
   const tr = rows.slice(0,400).map(p => { const s=p.stats, tg=p.team?state.teamGame[p.team]:null; const r=state.rostered[p.key];
-    return `<tr class="${p.inj&&INACTIVE.test(p.inj)?'zero':''}"><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}${tg?' '+oppCell(tg):''}</td><td class="num">${tg?fmt(tg.implied,1):'—'}</td><td class="num">${fmt(s.passYds,0)}</td><td class="num">${fmt(s.passTd,2)}</td><td class="num">${fmt(s.ints,2)}</td><td class="num">${fmt(s.rushYds,0)}</td><td class="num">${fmt(s.rec,1)}</td><td class="num">${fmt(s.recYds,0)}</td><td class="num">${pct(s.pAtd)}</td><td class="num">${fmt(s.xTd,2)}</td>${lgs.map(l=>`<td class="num proj">${fmt(p.leaguePts[l.id])}</td>`).join('')}<td>${r?r.map(x=>`<span class="tag on">${esc(x)}</span>`).join(' '):''}</td></tr>`; }).join('');
+    return `<tr class="${p.inj&&INACTIVE.test(p.inj)?'zero':''}"><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}${tg?' '+oppCell(tg):''}</td><td class="num">${fmt(s.passYds,0)}</td><td class="num">${fmt(s.passTd,2)}</td><td class="num">${fmt(s.ints,2)}</td><td class="num">${fmt(s.rushYds,0)}</td><td class="num">${fmt(s.rec,1)}</td><td class="num">${fmt(s.recYds,0)}</td><td class="num">${pct(s.pAtd)}</td><td class="num">${fmt(s.xTd,2)}</td>${lgs.map(l=>`<td class="num proj">${fmt(p.leaguePts[l.id])}</td>`).join('')}<td>${r?r.map(x=>`<span class="tag on">${esc(x)}</span>`).join(' '):''}</td></tr>`; }).join('');
   html += `<div class="tbl"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div><p class="foot">${rows.length} players with props this week${rows.length>400?' (showing the top 400 — use the filters)':''}. Every player the books list, scored under each league's rules: use it for waivers and streamers, not just your roster.</p>`;
   return html;
 }
@@ -1374,7 +1348,6 @@ function renderBoard(){
 // ============================================================ rendering — settings
 function renderSettings(){
   const c = state.config;
-  const surv = Object.entries(c.survivor.entries||{}).map(([e,p]) => `${e}: ${p.join(', ')}`).join('\n');
   const leagueBlocks = c.leagues.map((l,i) => {
     let inner = '';
     if(l.platform==='sleeper') inner = `<div class="field"><label>Sleeper league ID</label><input type="text" inputmode="numeric" data-lg="${i}" data-k="leagueId" value="${esc(l.leagueId||'')}"><p class="help">Roster, taxi, and current starters come from the Sleeper API on every refresh.</p></div>`;
@@ -1400,9 +1373,6 @@ function renderSettings(){
       <div class="field"><label>Name aliases (book name → Sleeper name), JSON</label><textarea id="sAliases" style="min-height:70px">${esc(JSON.stringify(c.aliases))}</textarea><p class="help">For a player the books list under a different name than Sleeper does.</p></div>
       <div class="field"><label>Refresh scores every (seconds, while a starter is playing)</label><input type="number" id="sRefresh" value="${esc(c.refreshSeconds)}" min="20"></div>
     </div>
-    <div class="panel"><h3>Survivor pool</h3>
-      <div class="field"><label>Picks (entry: week 1, week 2, …)</label><textarea id="sSurv">${esc(surv)}</textarea><p class="help">Team abbreviations or nicknames. Leave a week blank with a dash.</p></div>
-    </div>
     <div class="panel"><h3>Phone sync</h3>
       <div class="field"><label>PIN</label><input type="password" id="sPin" autocomplete="off" value="${esc(localStorage.getItem(LS.pin)||'')}" placeholder="4+ characters"><p class="help">Settings are encrypted right here in the browser with this PIN; the worker only ever stores the sealed blob. On the phone: same worker URL, same PIN, then “Load from worker”.</p></div>
       <div class="actions"><button id="sSyncUp">Save to worker</button><button id="sSyncDown">Load from worker</button></div>
@@ -1421,8 +1391,6 @@ function saveSettingsForm(){
   c.sleeper.username = $('#sUser').value.trim();
   c.refreshSeconds = Math.max(20, Number($('#sRefresh').value)||60);
   try{ c.aliases = JSON.parse($('#sAliases').value||'{}'); }catch(e){ $('#sMsg').textContent='Aliases must be valid JSON'; return; }
-  c.survivor.entries = {};
-  for(const line of $('#sSurv').value.split('\n')){ const m = line.match(/^\s*([^:]+?)\s*:\s*(.*)$/); if(m) c.survivor.entries[m[1]] = m[2].split(',').map(s => { const t=s.trim(); return t==='-'||t==='' ? '' : (normAbbr(t)||''); }); }
   document.querySelectorAll('[data-lg]').forEach(el => {
     const l = c.leagues[Number(el.dataset.lg)], k = el.dataset.k; if(!l) return;
     if(k==='roster') l.roster = el.value.split('\n').map(s=>s.trim()).filter(Boolean);
@@ -1500,12 +1468,6 @@ function bind(){
     saveJSON(LS.cbs, state.cbs);
     const card = state.cards.find(c => c.kind==='cbs'); if(card) card.scores = state.cbs[w];
     const el = $('#cbsRec'); if(el) el.textContent = cbsRecord();
-  });
-  document.querySelectorAll('input[data-surv]').forEach(i => i.onchange = () => {
-    const week = state.week || state.autoWeek || 1; const [entry] = i.dataset.surv.split('|');
-    const arr = state.config.survivor.entries[entry] ||= [];
-    while(arr.length<week) arr.push('');
-    arr[week-1] = normAbbr(i.value)||''; saveJSON(LS.config, state.config); refreshScores();
   });
   if(state.tab==='board' && state.proj){
     $('#fPos').onchange = e => { state.board.pos=e.target.value; render(); };
