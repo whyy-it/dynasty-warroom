@@ -1170,6 +1170,12 @@ function projOf(s, lg, gs){
   const bv = p ? scorePlayer(p, lg, state.teamGame) : null;
   if(bv!=null) return {v:bv, src:'book'};
   const w = playWeight(s, gs);
+  if(w < 1){
+    // injured, pregame: platforms discount their own numbers unpredictably (ESPN slashes,
+    // Sleeper holds full) — so build the EV ourselves: healthy stat baseline × play odds
+    const ev = sleeperEst(s, lg);
+    if(ev!=null) return {v: ev*w, src:'est'};
+  }
   if(s.proj!=null && isFinite(s.proj)) return {v:Number(s.proj)*w, src:'est'};
   const ev = sleeperEst(s, lg);
   return {v: ev!=null ? ev*w : null, src: ev!=null ? 'est' : null};
