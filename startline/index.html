@@ -1477,7 +1477,21 @@ function renderWeek(){
   let strip = '';
   if(state.cache){
     const games = Object.values(state.cache.games).sort((x,y) => Date.parse(x.commence)-Date.parse(y.commence));
-    strip = `<div class="games">` + games.map(g => { const d=new Date(g.commence); return `<div class="game"><b>${g.away} @ ${g.home}</b> ${d.toLocaleString('en-US',{weekday:'short',hour:'numeric'})}${g.stale?' <span class="tag">earlier pull</span>':''}<br>${g.spreadHome!=null?(g.home+' '+(g.spreadHome>0?'+':'')+g.spreadHome):'—'} , o/u ${fmt(g.total,1)}<br>${g.away} ${fmt(g.implied[g.away],1)} , ${g.home} ${fmt(g.implied[g.home],1)}</div>`; }).join('') + `</div>`;
+    strip = `<div class="games">` + games.map(g => {
+      const d = new Date(g.commence);
+      const st = state.sbIdx[g.home] || state.sbIdx[g.away]; const sg = st && st.game;
+      const vegas = `${g.spreadHome!=null?(g.home+' '+(g.spreadHome>0?'+':'')+g.spreadHome):'—'} , o/u ${fmt(g.total,1)}`;
+      // pregame: kickoff / market / implieds — once it starts: clock / live score / market
+      let l1 = d.toLocaleString('en-US',{weekday:'short',hour:'numeric'});
+      let l2 = vegas, l3 = `${g.away} ${fmt(g.implied[g.away],1)} , ${g.home} ${fmt(g.implied[g.home],1)}`;
+      if(sg && st.state!=='pre'){
+        const h = sg.teams.find(t=>t.abbr===g.home), a = sg.teams.find(t=>t.abbr===g.away);
+        const score = h && a ? `${a.abbr} ${a.score} – ${h.abbr} ${h.score}` : '';
+        l1 = st.state==='in' ? `<span class="warn">${esc(sg.detail||'live')}</span>` : 'Final';
+        l2 = `<b>${esc(score)}</b>`; l3 = vegas;
+      }
+      return `<div class="game"><b>${g.away} @ ${g.home}</b> ${l1}${g.stale?' <span class="tag">earlier pull</span>':''}<br>${l2}<br>${l3}</div>`;
+    }).join('') + `</div>`;
   }
   return `<div class="cards">${state.cards.map(renderCard).join('')}</div>` + strip
     + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in. A starter the books haven't priced is estimated from the platform's or Sleeper's projections and counted as "est." on the card — actual points always win. Win % is a rough read on the spread of remaining outcomes, not a betting price.</p>`;
