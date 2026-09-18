@@ -1135,6 +1135,21 @@ function recompute(){
 }
 
 // ============================================================ projected final
+// The stat components a named coverage gap is missing, valued from the Sleeper baseline.
+function sleeperFill(s, lg, gaps){
+  const sp = state.sproj; if(!sp || !sp.by) return null;
+  const id = s.id || sleeperPlayer(normName(s.name||''), s.team)?.id;
+  const st = id != null ? sp.by[id] : null; if(!st) return null;
+  const sc = lg.scoring; let v = 0;
+  for(const g of gaps){
+    if(g==='no pass yds') v += sc.passYd*st.py;
+    else if(g==='no pass TD') v += sc.passTd*st.ptd;
+    else if(g==='no rush yds') v += sc.rushYd*st.ry;
+    else if(g==='no rec yds' || g==='no rec line') v += sc.rec*st.rc + sc.recYd*st.rcy;
+    else if(g==='no TD line') v += sc.rushTd*st.rtd + sc.recTd*st.rctd;
+  }
+  return v || null;
+}
 function sleeperEst(s, lg){
   const sp = state.sproj; if(!sp || !sp.by) return null;
   const id = s.id || sleeperPlayer(normName(s.name||''), s.team)?.id;
@@ -1168,7 +1183,16 @@ function projOf(s, lg, gs){
   }
   const p = findProjection(normName(s.name||''), s.team);
   const bv = p ? scorePlayer(p, lg, state.teamGame) : null;
-  if(bv!=null) return {v:bv, src:'book'};
+  if(bv!=null){
+    // Partial coverage trap (the Zay Flowers case): books post a lone anytime-TD line on a
+    // questionable player, and that 2-point number would outrank a 14-point reality. Keep
+    // the priced components — the market's number embeds his play odds — and fill only the
+    // stats this league scores that the books haven't priced, from the healthy baseline.
+    const gaps = coverageFlags(p).filter(f => flagMatters(f, lg));
+    const fill = gaps.length ? sleeperFill(s, lg, gaps) : null;
+    if(fill) return {v: bv + fill*playWeight(s, gs), src:'mix'};
+    return {v:bv, src:'book'};
+  }
   const w = playWeight(s, gs);
   if(w < 1){
     // injured, pregame: platforms discount their own numbers unpredictably (ESPN slashes,
@@ -1209,7 +1233,7 @@ function pendingCounts(side, lg){
     const gs = st ? st.state : null;
     if(gs!=='pre' && gs!=='in') continue;
     const {src} = projOf(s, lg, gs);
-    if(src==='est') est++; else if(!src) miss++;
+    if(src==='est' || src==='mix') est++; else if(!src) miss++;
   }
   return {est, miss};
 }
