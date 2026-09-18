@@ -91,10 +91,18 @@ details[open] summary::before{content:'▾'}
 .wpbar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:7px 0 1px}
 .wpbar i{display:block;height:100%;min-width:2%;max-width:98%;background:linear-gradient(90deg,var(--accent),#ffd47a);border-radius:2px;transition:width .6s ease}
 @media (prefers-reduced-motion:reduce){.wpbar i{transition:none}}
+/* phone: this block sits ABOVE the base .vs rules in the sheet, so every selector here
+   must out-rank them — .vs .tm .nm beats .vs .nm, .vs .sc beats .sc */
 @media (max-width:699px){
+  .vs{gap:8px}
+  .vs .sc{font-size:32px}
   .vs .tm{flex-direction:column;align-items:flex-start;gap:3px}
   .vs .tm.op{flex-direction:column;align-items:flex-end}
   .vs .tmt{width:100%}
+  .vs .tm .nm{font-size:13px;line-height:1.15;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .vs .tm .meta{font-size:11px}
+  .card .duel .pw{gap:6px}
+  .card .duel .hs{width:24px;height:24px;flex:0 0 24px}
 }
 .vs .nm{font-weight:600;font-size:15px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
