@@ -84,13 +84,18 @@ details[open] summary::before{content:'▾'}
 .card details td.pts{font-family:'JetBrains Mono',monospace;text-align:right;white-space:nowrap;width:44px;padding-top:7px}
 .card details td.pts.zero{color:var(--dim)}
 .vs{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:start;padding:2px 0 0}
-.vs .tm{min-width:0}
-.vs .tm.op{text-align:right}
+.vs .tm{min-width:0;display:flex;align-items:center;gap:8px}
+.vs .tm.op{text-align:right;flex-direction:row-reverse}
+.vs .tmt{min-width:0}
+.tav{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:0 0 34px;background:var(--bg3);border:1px solid var(--rule2)}
+.wpbar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:7px 0 1px}
+.wpbar i{display:block;height:100%;min-width:2%;max-width:98%;background:linear-gradient(90deg,var(--accent),#ffd47a);border-radius:2px;transition:width .6s ease}
+@media (prefers-reduced-motion:reduce){.wpbar i{transition:none}}
 .vs .nm{font-weight:600;font-size:15px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .mid{display:flex;flex-direction:column;align-items:center;gap:1px}
 .vs .bigs{display:flex;align-items:baseline;gap:7px;justify-content:center}
-.vs .now{color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace;white-space:nowrap}
+.vs .now{color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace;text-align:center}
 .sc{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:41px;line-height:.95;font-variant-numeric:tabular-nums}
 .sc.ahead{color:var(--text)} .sc.behind{color:var(--muted)} .sc.won{color:var(--up)} .sc.lost{color:var(--down)}
 .vs .dash{color:var(--dim);font-size:18px}
@@ -108,6 +113,12 @@ details[open] summary::before{content:'▾'}
 .card .duel td.pl .g{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
 .card .duel td.pl .g.live{color:var(--accent)}
 .card .duel td.pl.wait .n{color:var(--muted)}
+.card .duel .pw{display:flex;align-items:center;gap:8px;min-width:0}
+.card .duel td.pl.op .pw{flex-direction:row-reverse}
+.card .duel .pt{min-width:0}
+.card .duel .hs{width:28px;height:28px;border-radius:50%;object-fit:cover;flex:0 0 28px;background:var(--bg3);border:1px solid var(--rule);display:inline-block}
+.card .duel .hs.lg{object-fit:contain;padding:3px}
+.card .duel td.pl.wait .hs{opacity:.55}
 .card .duel td.pl.op{text-align:right}
 @media (min-width:700px){ .sc{font-size:46px} .card .duel td.pl .n,.card .duel td.pl .g{max-width:none} }
 .cbs .side input{font:inherit;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:44px;line-height:.95;width:96px;text-align:right;background:var(--bg3);border:1px solid var(--rule2);border-radius:8px;color:var(--text);padding:2px 8px}
@@ -792,6 +803,9 @@ async function loadSleeperCard(lg, week){
       const om = m && matchups.find(x => x.matchup_id===m.matchup_id && x.roster_id!==m.roster_id);
       const or_ = om && rosters.find(x => x.roster_id===om.roster_id);
       if(card.opp && or_) card.opp.bench = bench(or_, om);
+      if(card.me && me.avatar) card.me.avatar = `https://sleepercdn.com/avatars/thumbs/${me.avatar}`;
+      const ou = or_ && users.find(u => u.user_id===or_.owner_id);
+      if(card.opp && ou?.avatar) card.opp.avatar = `https://sleepercdn.com/avatars/thumbs/${ou.avatar}`;
     }
   }
   return card;
@@ -818,6 +832,10 @@ async function loadEspnCard(lg, week){
   try{ data = await fetchJSON(url); }
   catch(e){ throw new Error(w ? `Worker: ${e.message}` : `ESPN blocked the direct request (${e.message}). Private leagues need the worker URL in Settings.`); }
   const card = buildEspnCard(lg, data, past ? week : null);
+  for(const side of [card.me, card.opp]){ if(!side) continue;
+    const t = (data.teams||[]).find(x => (x.name || `${x.location||''} ${x.nickname||''}`.trim())===side.name);
+    if(t && t.logo) side.avatar = t.logo;
+  }
   state.lgRost[lg.id] = rostSet([...(data.teams||[]).flatMap(t => t.roster?.entries||[]),
     ...(data.schedule||[]).flatMap(s => [s.home, s.away]).flatMap(x => x?.rosterForCurrentScoringPeriod?.entries || x?.rosterForMatchupPeriod?.entries || [])]
     .map(e => { const p = e.playerPoolEntry?.player||{}; return {name:p.fullName, team:PRO_TEAM[p.proTeamId]||null}; }));
@@ -857,7 +875,7 @@ async function loadCbsCard(lg, week){
     const oppT = ls.teams.find(t => String(t.id)===String(mu.opponent_team_id)) || null;
     const side = t => ({
       name: t.name || '?', record: `${t.record||''}${Number(t.t)?'-'+t.t:''}`,
-      points: Number(t.pts)||0, projected: null,
+      points: Number(t.pts)||0, projected: null, avatar: t.logo || null,
       starters: (t.players||[]).filter(p => p.status==='Active').map(p => ({
         slot: p.roster_pos==='RB-WR-TE' ? 'FLEX' : (p.roster_pos||p.position||''),
         name: p.fullname || `${p.firstname||''} ${p.lastname||''}`.trim(),
@@ -879,7 +897,7 @@ async function loadCbsCard(lg, week){
         for(const p of s.bench||[]) p.pts = null;
       }
       const schedOpp = (lg.schedule||{})[week];
-      if(schedOpp && card.opp){ card.opp.name = schedOpp; card.opp.record = ''; }
+      if(schedOpp && card.opp){ card.opp.name = schedOpp; card.opp.record = ''; card.opp.avatar = null; }
     }
     state.live[lg.id] = {at:Date.now(), kind:'cbs', entries: (mine.players||[]).map(p => ({
       name: p.fullname || `${p.firstname||''} ${p.lastname||''}`.trim(), pos: p.position||'',
@@ -1237,6 +1255,18 @@ function render(){
 // ============================================================ rendering — matchup cards
 // App-style matchup layout: score strip up top, my starters lined up against the opponent's
 // row by row with the slot in the middle, bench underneath.
+// Sleeper's public CDN has a photo for every player id and a logo for every team —
+// that one source covers all three platforms once a name resolves to a sleeper id.
+function headshot(p){
+  if(p.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(p.name||'')){
+    const t = p.team || teamAbbr(p.name||'');
+    if(t) return `<img class="hs lg" src="https://sleepercdn.com/images/team_logos/nfl/${esc(String(t).toLowerCase())}.png" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`;
+  } else {
+    const id = p.id || sleeperPlayer(normName(p.name||''), p.team)?.id;
+    if(id && /^\d+$/.test(String(id))) return `<img class="hs" src="https://sleepercdn.com/content/nfl/players/${esc(id)}.jpg" alt="" loading="lazy" onerror="this.style.visibility='hidden'">`;
+  }
+  return `<span class="hs ph"></span>`;
+}
 function duelCell(p, right, lg){
   if(!p) return right ? `<td class="pts op"></td><td class="pl op"></td>` : `<td class="pl"></td><td class="pts"></td>`;
   const st = p.team ? state.sbIdx[p.team] : null; const gl = gameLine(st?.game, p.team);
@@ -1250,7 +1280,7 @@ function duelCell(p, right, lg){
     const pr = lg && state.proj ? starterProj(p, lg) : null;
     if(pr!=null){ val = pr; cls = ' pp'; } else { val = null; cls = ' zero'; }
   }
-  const info = `<div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div>`;
+  const info = `<div class="pw">${headshot(p)}<div class="pt"><div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div></div></div>`;
   const pts = `<td class="pts${right?' op':''}${cls}">${fmt(val)}</td>`;
   const pl = `<td class="pl${right?' op':''}${waiting?' wait':''}">${info}</td>`;
   return right ? pts + pl : pl + pts;
@@ -1272,11 +1302,12 @@ function matchupHTML(c, status){
   const scls = (s,o) => { if(!s || !o) return '';
     if(fin) return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
     return s.points>=o.points ? 'ahead' : 'behind'; };
-  const tm = (s,op) => `<div class="tm${op?' op':''}">${s ? `<div class="nm">${esc(s.name)}</div><div class="meta">${esc(s.record||'')}${s.owner?' '+esc(s.owner):''}</div>` : `<div class="nm muted">No opponent</div><div class="meta">this week</div>`}</div>`;
+  const tm = (s,op) => `<div class="tm${op?' op':''}">${s ? `${s.avatar?`<img class="tav" src="${esc(s.avatar)}" alt="" loading="lazy" onerror="this.remove()">`:''}<div class="tmt"><div class="nm">${esc(s.name)}</div><div class="meta">${esc(s.record||'')}${s.owner?' '+esc(s.owner):''}</div></div>` : `<div class="tmt"><div class="nm muted">No opponent</div><div class="meta">this week</div></div>`}</div>`;
   const sub = s => { if(!s || !(s.starters||[]).length) return '';
     const lc = leftCount(s.starters, state.sbIdx);
     return lc.left===0 ? 'done' : `${lc.left} left${lc.live?`, ${lc.live} live`:''}`; };
   let h = `<div class="vs">${tm(c.me,false)}<div class="mid"><div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(c.me.points)}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(c.opp.points):'—'}</span></div>${useProj?`<div class="now">proj ${fmt(c.me.projected??c.me.points)} – ${c.opp?fmt(c.opp.projected??c.opp.points):'—'}${wpTxt}${missTxt}</div>`:''}</div>${tm(c.opp,true)}</div>`;
+  if(wp!=null) h += `<div class="wpbar" title="win odds"><i style="width:${Math.round(wp*100)}%"></i></div>`;
   h += `<div class="subvs"><span>${sub(c.me)}</span><span>${sub(c.opp)}</span></div>`;
   h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[], lg)}</tbody></table>`;
   const bn = c.me.bench||[], bo = c.opp?.bench||[];
@@ -1314,7 +1345,7 @@ function renderCard(c){
     const both = me!=null && s.opp!=null;
     const meMeta = a ? (a.done ? 'you, final' : a.live ? 'you, live from the box scores' : 'you, from the box scores') : 'you';
     return `<article class="card cbs"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span><span class="pill" id="cbsRec">${cbsRecord()}</span></div>
-      ${c.liveErr?`<p class="note err">CBS live link: ${esc(c.liveErr)}</p>`:''}
+      ${c.liveErr?`<p class="note"><span class="warn">CBS live link down</span> — scores from the NFL box instead. <span class="dim">${esc(String(c.liveErr).slice(0,80))}</span></p>`:''}
       <div class="side ${both?(me>s.opp?'ahead':me<s.opp?'behind':''):''}"><div class="who"><div class="nm">${esc(c.myTeam)}</div><div class="meta">${meMeta}</div></div><div class="left"></div><div><div class="score">${fmt(me??0)}</div>${a && !a.done ? `<div class="proj">proj ${fmt(a.proj)}</div>` : ''}</div></div>
       <div class="side ${both?(s.opp>me?'ahead':s.opp<me?'behind':''):''}"><div class="who"><div class="nm">${esc(c.opp||'Opponent')}</div><div class="meta">${c.opp?'this week':'add the schedule in Settings'}</div></div><div class="left"></div><input type="number" inputmode="decimal" step="0.5" placeholder="0" data-cbs="opp" value="${s.opp??''}" aria-label="Opponent score"></div>
       <div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Your score adds itself up from the NFL box scores; type the opponent's from the CBS page.</span></div></article>`;
@@ -1331,7 +1362,15 @@ function renderWeek(){
 function oppCell(tg){ if(!tg) return '—'; return (tg.home?'v ':'@ ')+tg.opp; }
 function playerCell(e){
   const tags = []; if(e.pos) tags.push(`<span class="tag pos">${esc(e.pos)}</span>`);
-  for(const f of e.flags||[]){ const cls = /^(Q|D|OUT|IR|PUP|SUS|NA|COV|DNR)$/.test(f) ? 'inj' : 'warn'; tags.push(`<span class="tag ${cls}">${esc(f)}</span>`); }
+  const flags = e.flags||[];
+  // several missing-market flags on one player collapse to one tag (detail on hover);
+  // the tab banner already totals them up
+  const detail = flags.filter(f => /^no /.test(f) && f!=='no line' && f!=='no game this week');
+  for(const f of flags){
+    if(detail.length>1 && detail.includes(f)) continue;
+    const cls = /^(Q|D|OUT|IR|PUP|SUS|NA|COV|DNR)$/.test(f) ? 'inj' : 'warn'; tags.push(`<span class="tag ${cls}">${esc(f)}</span>`);
+  }
+  if(detail.length>1) tags.push(`<span class="tag warn" title="${esc(detail.join(', '))}">partial</span>`);
   return `<td class="name">${esc(e.name)}${tags.length?' '+tags.join(''):''}</td>`;
 }
 function statCells(e){
