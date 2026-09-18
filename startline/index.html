@@ -42,7 +42,7 @@ p{margin:6px 0}
 
 /* ---- matchup cards (Week tab and the top of each league tab) */
 .cards{display:grid;gap:12px}
-#main:not(.wide) .cards{display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 2px 12px;scrollbar-width:none}
+#main:not(.wide) .cards{display:flex;align-items:flex-start;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;padding:2px 2px 12px;scrollbar-width:none}
 #main:not(.wide) .cards::-webkit-scrollbar{display:none}
 #main:not(.wide) .cards>.card{flex:0 0 100%;scroll-snap-align:center;min-width:0}
 .card{background:var(--bg2);background-image:linear-gradient(180deg,#0f1830,#0b1222);border:1px solid var(--rule);border-top:3px solid var(--acc,var(--rule));border-radius:6px;padding:12px 14px 10px}
@@ -100,7 +100,7 @@ details[open] summary::before{content:'▾'}
 .sc.ahead{color:var(--text)} .sc.behind{color:var(--muted)} .sc.won{color:var(--up)} .sc.lost{color:var(--down)}
 .vs .dash{color:var(--dim);font-size:18px}
 .subvs{display:flex;justify-content:space-between;gap:10px;color:var(--muted);font-size:11px;font-family:'JetBrains Mono',monospace;margin-top:2px}
-.card .duel{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}
+.card .duel{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px;table-layout:fixed}
 .card .duel td{padding:5px 2px;border-top:1px solid var(--rule);vertical-align:top}
 .card .duel td.slot{color:var(--dim);font-family:'JetBrains Mono',monospace;font-size:10px;width:44px;text-align:center;padding-top:8px}
 .card .duel td.pts{font-family:'JetBrains Mono',monospace;text-align:right;white-space:nowrap;width:44px;padding-top:7px}
@@ -576,13 +576,13 @@ const {SLEEPER, ESPN_READS, NFL_SB, PRO_TEAM, POS_NAME, SLOT_NAME, normAbbr, par
 // ============================================================ state and storage
 const LS = {config:'startline.config.v2', cache:'startline.cache.v2', players:'startline.players.v2',
             live:'startline.live.v2', nfl:'startline.nfl.v2', cbs:'startline.cbs.v2',
-            box:'startline.box.v2', snap:'startline.snap.v2', pin:'startline.pin.v2', tab:'startline.tab'};
+            box:'startline.box.v2', sproj:'startline.sproj.v2', snap:'startline.snap.v2', pin:'startline.pin.v2', tab:'startline.tab'};
 const PLATFORM = {sleeper:'Sleeper', espn:'ESPN', cbs:'CBS'};
 
 const state = {
   config:null, cache:null, players:null, live:{}, nfl:{}, cbs:{}, box:{}, cards:[], sbIdx:{},
   week:null, autoWeek:null, season:null, credits:null,
-  proj:null, teamGame:{}, views:{}, rostered:{}, lgRost:{},
+  proj:null, sproj:null, teamGame:{}, views:{}, rostered:{}, lgRost:{},
   tab:null, board:{pos:'ALL', mine:false, q:'', sort:null, dir:-1},
   busy:false, busyMsg:'', error:null, at:null, timer:null,
 };
@@ -652,6 +652,23 @@ async function ensurePlayers(){
   const raw = await fetchJSON(`${SLEEPER}/players/nfl`);
   state.players = {at:Date.now(), byId:trimPlayers(raw)}; state._pidx = null; saveJSON(LS.players, state.players);
   return state.players.byId;
+}
+// Sleeper's free weekly stat projections (CORS-open, no key) — the fallback source when a
+// starter has no priced line. Trimmed to rostered-position ids and the ten stats we score.
+async function ensureSproj(){
+  const wk = state.week || state.autoWeek;
+  if(!wk || !state.season || !state.players) return;
+  const cur = state.sproj;
+  if(cur && cur.week===wk && cur.season===state.season && Date.now()-cur.at < 6*3600e3) return;
+  const raw = await fetchJSON(`${SLEEPER}/projections/nfl/regular/${state.season}/${wk}`);
+  const keep = {};
+  for(const [id, s] of Object.entries(raw)){
+    if(!s || !state.players.byId[id]) continue;
+    keep[id] = {py:s.pass_yd||0, ptd:s.pass_td||0, pint:s.pass_int||0, ry:s.rush_yd||0, rtd:s.rush_td||0,
+                rc:s.rec||0, rcy:s.rec_yd||0, rctd:s.rec_td||0, fl:s.fum_lost||0, k:s.pts_std||0};
+  }
+  state.sproj = {at:Date.now(), week:wk, season:state.season, by:keep};
+  saveJSON(LS.sproj, state.sproj);
 }
 
 // ============================================================ The Odds API (costs credits, on demand only)
@@ -923,6 +940,7 @@ async function refreshScores(){
     try{ state.sbIdx = teamStatusIndex({games: await nflWeek(week)}); }catch(e){ state.sbIdx = {}; }
     try{ await loadBox(); }catch(e){}
     try{ await ensurePlayers(); }catch(e){ state.error = 'Sleeper player list failed: '+e.message; }
+    try{ await ensureSproj(); }catch(e){}
     setBusy('Loading matchups…');
     const jobs = state.config.leagues.map(lg =>
       loadCard(lg, week).then(c => { c.id = lg.id; return c; })
@@ -1094,11 +1112,31 @@ function recompute(){
 }
 
 // ============================================================ projected final
-function starterProj(s, lg){
-  if(s.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(s.name)) return dstPoints(lg.scoring.dst, state.teamGame[s.team]);
-  const p = findProjection(normName(s.name), s.team);
-  return p ? scorePlayer(p, lg, state.teamGame) : null;
+function sleeperEst(s, lg){
+  const sp = state.sproj; if(!sp || !sp.by) return null;
+  const id = s.id || sleeperPlayer(normName(s.name||''), s.team)?.id;
+  const st = id != null ? sp.by[id] : null; if(!st) return null;
+  if(s.pos==='K') return st.k * (lg.scoring.kMult||1);
+  const sc = lg.scoring;
+  return sc.passYd*st.py + sc.passTd*st.ptd + (sc.int||0)*st.pint + sc.rushYd*st.ry + sc.rushTd*st.rtd
+       + sc.rec*st.rc + sc.recYd*st.rcy + sc.recTd*st.rctd + sc.fumble*st.fl;
 }
+// One chain for what a starter is worth before he plays: the books' lines first, then the
+// platform's own projection (ESPN carries one per player), then Sleeper's stat projections
+// scored under this league's rules. src tells the card what to admit to.
+function projOf(s, lg){
+  if(s.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(s.name||'')){
+    const v = dstPoints(lg.scoring.dst, state.teamGame[s.team]);
+    return {v, src: v!=null ? 'book' : null};
+  }
+  const p = findProjection(normName(s.name||''), s.team);
+  const bv = p ? scorePlayer(p, lg, state.teamGame) : null;
+  if(bv!=null) return {v:bv, src:'book'};
+  if(s.proj!=null && isFinite(s.proj)) return {v:Number(s.proj), src:'est'};
+  const ev = sleeperEst(s, lg);
+  return {v:ev, src: ev!=null ? 'est' : null};
+}
+function starterProj(s, lg){ return projOf(s, lg).v; }
 // points so far + every 'pre' starter's projection + the upside still on the table for 'in' starters.
 // 'post' and bye starters contribute only what they already scored.
 function projectedFinal(side, lg){
@@ -1118,16 +1156,18 @@ function projectedFinal(side, lg){
   if(resolved < pending/2) return null;     // lines cover too few of the remaining starters — keep the platform's own number
   return total;
 }
-// Starters still to play whose remaining points the lines can't price yet.
-function pendingNoLine(side, lg){
-  let n = 0;
+// Starters still to play, split by how their remaining points are sourced:
+// est = platform/Sleeper estimate stands in for a missing line; miss = no source at all.
+function pendingCounts(side, lg){
+  let est = 0, miss = 0;
   for(const s of (side?.starters)||[]){
     const st = s.team ? state.sbIdx[s.team] : null;
     const gs = st ? st.state : null;
     if(gs!=='pre' && gs!=='in') continue;
-    if(starterProj(s, lg)==null) n++;
+    const {src} = projOf(s, lg);
+    if(src==='est') est++; else if(!src) miss++;
   }
-  return n;
+  return {est, miss};
 }
 // Rough win odds from the same machinery: each side's final ≈ projected final, spread by what's
 // still on the field (sd per pending starter = 75% of his remaining projection, floor 3).
@@ -1297,8 +1337,9 @@ function matchupHTML(c, status){
   const useProj = !fin && (c.me?.projected!=null || c.opp?.projected!=null);
   const wp = useProj ? winProb(c, lg) : null;
   const wpTxt = wp==null ? '' : ` · win ${wp>0.99?'>99':wp<0.01?'<1':Math.round(wp*100)}%`;
-  const miss = !fin && lg && state.proj ? pendingNoLine(c.me, lg) + pendingNoLine(c.opp, lg) : 0;
-  const missTxt = miss ? ` · <span class="warn">${miss} w/o lines</span>` : '';
+  const pc = {est:0, miss:0};
+  if(!fin && lg && state.proj) for(const s of [c.me, c.opp]){ const x = pendingCounts(s, lg); pc.est += x.est; pc.miss += x.miss; }
+  const missTxt = pc.est || pc.miss ? ` · <span class="warn">${[pc.est ? pc.est+' est.' : '', pc.miss ? pc.miss+' w/o lines' : ''].filter(Boolean).join(', ')}</span>` : '';
   const scls = (s,o) => { if(!s || !o) return '';
     if(fin) return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
     return s.points>=o.points ? 'ahead' : 'behind'; };
@@ -1355,7 +1396,7 @@ function renderCard(c){
 function renderWeek(){
   if(!state.cards.length) return `<div class="cards"><article class="card"><p class="note">Nothing loaded yet. Tap <b>Refresh scores</b>. Sleeper works as is; the ESPN card needs the worker URL and league ID in Settings.</p></article></div>`;
   return `<div class="cards">${state.cards.map(renderCard).join('')}</div>`
-    + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in; without lines the platform's own projection is shown. Win % is a rough read on the spread of remaining outcomes, not a betting price.</p>`;
+    + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in. A starter the books haven't priced is estimated from the platform's or Sleeper's projections and counted as "est." on the card — actual points always win. Win % is a rough read on the spread of remaining outcomes, not a betting price.</p>`;
 }
 
 // ============================================================ rendering — league start/sit
@@ -1649,6 +1690,7 @@ function copyLineup(id){
   state.players = loadJSON(LS.players); state.live = loadJSON(LS.live) || {};
   state.nfl = loadJSON(LS.nfl) || {}; state.cbs = loadJSON(LS.cbs) || {};
   state.box = loadJSON(LS.box) || {};
+  state.sproj = loadJSON(LS.sproj);
   state.tab = localStorage.getItem(LS.tab);
   state.board.sort = 'pts:' + (state.config.leagues[0]?.id || '');
   const snap = loadJSON(LS.snap);
