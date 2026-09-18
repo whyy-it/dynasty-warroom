@@ -91,6 +91,11 @@ details[open] summary::before{content:'▾'}
 .wpbar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin:7px 0 1px}
 .wpbar i{display:block;height:100%;min-width:2%;max-width:98%;background:linear-gradient(90deg,var(--accent),#ffd47a);border-radius:2px;transition:width .6s ease}
 @media (prefers-reduced-motion:reduce){.wpbar i{transition:none}}
+@media (max-width:699px){
+  .vs .tm{flex-direction:column;align-items:flex-start;gap:3px}
+  .vs .tm.op{flex-direction:column;align-items:flex-end}
+  .vs .tmt{width:100%}
+}
 .vs .nm{font-weight:600;font-size:15px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .meta{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vs .mid{display:flex;flex-direction:column;align-items:center;gap:1px}
@@ -972,9 +977,19 @@ function dstEntry(team, lg){
   return {key:'dst:'+team, name:(TEAMS.find(t=>t[1]===team)||[team])[0], pos:'DST', team, inj:null, stats:{}, pts, flags: tg ? [] : ['no game this week'], tg};
 }
 function kickedOff(tg){ return !!(tg && tg.commence && Date.parse(tg.commence) < Date.now()); }
+// A missing market only matters if this league scores the stat it prices —
+// a TD-only league has no use for rush/rec yardage lines.
+function flagMatters(f, lg){
+  const sc = lg.scoring;
+  if(f==='no pass yds') return !!sc.passYd;
+  if(f==='no pass TD') return !!sc.passTd;
+  if(f==='no rush yds') return !!sc.rushYd;
+  if(f==='no rec yds' || f==='no rec line') return !!(sc.rec || sc.recYd);
+  return true;
+}
 function entryFrom(proj, lg, extra){
   const tg = proj.team ? state.teamGame[proj.team] : null;
-  const pts = scorePlayer(proj, lg, state.teamGame); const flags = coverageFlags(proj);
+  const pts = scorePlayer(proj, lg, state.teamGame); const flags = coverageFlags(proj).filter(f => flagMatters(f, lg));
   if(proj.inj) flags.unshift(INJ_SHORT[proj.inj]||proj.inj);
   if(proj.posGuess) flags.push('position guessed');
   if(kickedOff(tg)) flags.push('kicked off');
