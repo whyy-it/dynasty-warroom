@@ -596,7 +596,7 @@ const state = {
   config:null, cache:null, players:null, live:{}, nfl:{}, cbs:{}, box:{}, cards:[], sbIdx:{},
   week:null, autoWeek:null, season:null, credits:null,
   proj:null, sproj:null, teamGame:{}, views:{}, rostered:{}, lgRost:{},
-  tab:null, board:{pos:'ALL', mine:false, q:'', sort:null, dir:-1},
+  tab:null,
   busy:false, busyMsg:'', error:null, at:null, timer:null, deckX:0,
 };
 
@@ -1144,10 +1144,24 @@ function sleeperEst(s, lg){
   return sc.passYd*st.py + sc.passTd*st.ptd + (sc.int||0)*st.pint + sc.rushYd*st.ry + sc.rushTd*st.rtd
        + sc.rec*st.rc + sc.recYd*st.rcy + sc.recTd*st.rctd + sc.fumble*st.fl;
 }
+// A hurt starter with no line yet is a coin flip, not a full projection: estimates get
+// probability-weighted by status (Q ~70%, D ~25%, ruled out 0). Book lines are never
+// scaled — once the books post him, the market already priced the risk (and their
+// appearing at all is the "he's playing" signal, so the number rises to full value).
+// Live players are never scaled either: they're on the field.
+const PLAY_ODDS = {Q:.7, D:.25};
+function playWeight(s, gs){
+  if(gs==='in') return 1;
+  const inj = s.inj ?? sleeperPlayer(normName(s.name||''), s.team)?.i;
+  if(!inj) return 1;
+  if(INACTIVE.test(inj)) return 0;
+  const w = PLAY_ODDS[INJ_SHORT[inj]||inj];
+  return w==null ? 1 : w;
+}
 // One chain for what a starter is worth before he plays: the books' lines first, then the
 // platform's own projection (ESPN carries one per player), then Sleeper's stat projections
 // scored under this league's rules. src tells the card what to admit to.
-function projOf(s, lg){
+function projOf(s, lg, gs){
   if(s.pos==='DST' || /\bd\/?st\b|\bdefense\b/i.test(s.name||'')){
     const v = dstPoints(lg.scoring.dst, state.teamGame[s.team]);
     return {v, src: v!=null ? 'book' : null};
@@ -1155,11 +1169,12 @@ function projOf(s, lg){
   const p = findProjection(normName(s.name||''), s.team);
   const bv = p ? scorePlayer(p, lg, state.teamGame) : null;
   if(bv!=null) return {v:bv, src:'book'};
-  if(s.proj!=null && isFinite(s.proj)) return {v:Number(s.proj), src:'est'};
+  const w = playWeight(s, gs);
+  if(s.proj!=null && isFinite(s.proj)) return {v:Number(s.proj)*w, src:'est'};
   const ev = sleeperEst(s, lg);
-  return {v:ev, src: ev!=null ? 'est' : null};
+  return {v: ev!=null ? ev*w : null, src: ev!=null ? 'est' : null};
 }
-function starterProj(s, lg){ return projOf(s, lg).v; }
+function starterProj(s, lg, gs){ return projOf(s, lg, gs).v; }
 // points so far + every 'pre' starter's projection + the upside still on the table for 'in' starters.
 // 'post' and bye starters contribute only what they already scored.
 function projectedFinal(side, lg){
@@ -1170,7 +1185,7 @@ function projectedFinal(side, lg){
     const gs = st ? st.state : null;
     if(gs!=='pre' && gs!=='in') continue;
     pending++;
-    const pr = starterProj(s, lg);
+    const pr = starterProj(s, lg, gs);
     if(pr==null) continue;
     resolved++;
     const pts = Number(s.pts)||0;
@@ -1187,7 +1202,7 @@ function pendingCounts(side, lg){
     const st = s.team ? state.sbIdx[s.team] : null;
     const gs = st ? st.state : null;
     if(gs!=='pre' && gs!=='in') continue;
-    const {src} = projOf(s, lg);
+    const {src} = projOf(s, lg, gs);
     if(src==='est') est++; else if(!src) miss++;
   }
   return {est, miss};
@@ -1205,7 +1220,7 @@ function winProb(c, lg){
       const gs = st ? st.state : null;
       if(gs!=='pre' && gs!=='in') continue;
       pending++;
-      const pr = starterProj(s, lg);
+      const pr = starterProj(s, lg, gs);
       const rem = pr==null ? 6 : gs==='pre' ? pr : Math.max(pr - (Number(s.pts)||0), 0);
       const sd = Math.max(3, .75*rem);
       v += sd*sd;
@@ -1299,7 +1314,7 @@ function renderStatus(){
 }
 function renderTabs(){
   const tabs = [{id:'week', label:'Week'}, ...state.config.leagues.map(l => ({id:l.id, label:l.short||l.name})),
-                {id:'board', label:'Board'}, {id:'settings', label:'Settings', right:true}];
+                {id:'settings', label:'Settings', right:true}];
   if(!state.tab || !tabs.some(t=>t.id===state.tab)) state.tab = 'week';
   $('#tabs').innerHTML = tabs.map(t => `<button class="tab${t.id===state.tab?' active':''}${t.right?' right':''}" data-tab="${esc(t.id)}">${esc(t.label)}</button>`).join('');
   $('#tabs').querySelectorAll('.tab').forEach(b => b.onclick = () => { state.tab=b.dataset.tab; localStorage.setItem(LS.tab, state.tab); render(); });
@@ -1318,7 +1333,6 @@ function render(){
   m.dataset.tab = t;
   m.classList.toggle('wide', t!=='week');
   if(t==='week') m.innerHTML = renderWeek();
-  else if(t==='board') m.innerHTML = renderBoard();
   else if(t==='settings') m.innerHTML = renderSettings();
   else m.innerHTML = renderLeagueTab(t);
   bind();
@@ -1352,7 +1366,7 @@ function duelCell(p, right, lg){
   let val = p.pts, cls = p.pts ? '' : ' zero';
   if(gs==='in') cls += ' lv';
   if(waiting){
-    const pr = lg && state.proj ? starterProj(p, lg) : null;
+    const pr = lg && state.proj ? starterProj(p, lg, gs) : null;
     if(pr!=null){ val = pr; cls = ' pp'; } else { val = null; cls = ' zero'; }
   }
   const info = `<div class="pw">${headshot(p)}<div class="pt"><div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div></div></div>`;
@@ -1430,7 +1444,12 @@ function renderCard(c){
 }
 function renderWeek(){
   if(!state.cards.length) return `<div class="cards"><article class="card"><p class="note">Nothing loaded yet. Tap <b>Refresh scores</b>. Sleeper works as is; the ESPN card needs the worker URL and league ID in Settings.</p></article></div>`;
-  return `<div class="cards">${state.cards.map(renderCard).join('')}</div>`
+  let strip = '';
+  if(state.cache){
+    const games = Object.values(state.cache.games).sort((x,y) => Date.parse(x.commence)-Date.parse(y.commence));
+    strip = `<div class="games">` + games.map(g => { const d=new Date(g.commence); return `<div class="game"><b>${g.away} @ ${g.home}</b> ${d.toLocaleString('en-US',{weekday:'short',hour:'numeric'})}${g.stale?' <span class="tag">earlier pull</span>':''}<br>${g.spreadHome!=null?(g.home+' '+(g.spreadHome>0?'+':'')+g.spreadHome):'—'} , o/u ${fmt(g.total,1)}<br>${g.away} ${fmt(g.implied[g.away],1)} , ${g.home} ${fmt(g.implied[g.home],1)}</div>`; }).join('') + `</div>`;
+  }
+  return `<div class="cards">${state.cards.map(renderCard).join('')}</div>` + strip
     + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in. A starter the books haven't priced is estimated from the platform's or Sleeper's projections and counted as "est." on the card — actual points always win. Win % is a rough read on the spread of remaining outcomes, not a betting price.</p>`;
 }
 
@@ -1545,27 +1564,6 @@ function renderLeagueTab(id){
 }
 function emptyState(){
   return `<div class="empty"><p><b>No lines loaded yet.</b></p><ol>${workerBase()?'':'<li>Open Settings and add your Cloudflare Worker URL.</li>'}<li>Pull lines. One pull costs about 2 + 8 × games in credits (~130 for a full slate).</li><li>Refresh scores to sync rosters and current starters from Sleeper and ESPN.</li><li>Paste the SJFL roster in Settings.</li></ol></div>`;
-}
-
-// ============================================================ rendering — board
-function renderBoard(){
-  if(!state.proj) return emptyState();
-  const b = state.board, lgs = state.config.leagues;
-  const games = Object.values(state.cache.games).sort((x,y) => Date.parse(x.commence)-Date.parse(y.commence));
-  let html = `<div class="games">` + games.map(g => { const d=new Date(g.commence); return `<div class="game"><b>${g.away} @ ${g.home}</b> ${d.toLocaleString('en-US',{weekday:'short',hour:'numeric'})}${g.stale?' <span class="tag">earlier pull</span>':''}<br>${g.spreadHome!=null?(g.home+' '+(g.spreadHome>0?'+':'')+g.spreadHome):'—'} , o/u ${fmt(g.total,1)}<br>${g.away} ${fmt(g.implied[g.away],1)} , ${g.home} ${fmt(g.implied[g.home],1)}</div>`; }).join('') + `</div>`;
-  html += `<div class="filters"><label>Position <select id="fPos">${['ALL','QB','RB','WR','TE','K'].map(p=>`<option${b.pos===p?' selected':''}>${p}</option>`).join('')}</select></label><label><input type="checkbox" id="fMine"${b.mine?' checked':''}> My players only</label><label>Search <input type="text" id="fQ" value="${esc(b.q)}" style="width:180px"></label></div>`;
-  let rows = Object.values(state.proj);
-  if(b.pos!=='ALL') rows = rows.filter(p => p.pos===b.pos);
-  if(b.mine) rows = rows.filter(p => state.rostered[p.key]);
-  if(b.q){ const q = normName(b.q); rows = rows.filter(p => p.key.includes(q) || (p.team||'').toLowerCase()===q); }
-  const val = (p,col) => { if(col.startsWith('pts:')) return p.leaguePts[col.slice(4)]; const s=p.stats; return {name:p.key, pos:p.pos, team:p.team||'', passYds:s.passYds, passTd:s.passTd, ints:s.ints, rushYds:s.rushYds, rec:s.rec, recYds:s.recYds, pAtd:s.pAtd, xTd:s.xTd}[col]; };
-  rows.sort((x,y) => { const a=val(x,b.sort), c=val(y,b.sort); if(a==null&&c==null) return 0; if(a==null) return 1; if(c==null) return -1; return (a<c?-1:a>c?1:0)*b.dir; });
-  const cols = [['name','Player',''],['pos','Pos',''],['team','Team',''],['passYds','Pass yds','num'],['passTd','Pass TD','num'],['ints','INT','num'],['rushYds','Rush yds','num'],['rec','Rec','num'],['recYds','Rec yds','num'],['pAtd','TD%','num'],['xTd','xTD','num'], ...lgs.map(l => ['pts:'+l.id, (l.short||l.name)+' pts','num'])];
-  const th = cols.map(([k,l,c]) => `<th class="sortable ${c}${b.sort===k?' sorted':''}" data-sort="${k}">${esc(l)}${b.sort===k?(b.dir<0?' ▾':' ▴'):''}</th>`).join('') + '<th>Rostered</th>';
-  const tr = rows.slice(0,400).map(p => { const s=p.stats, tg=p.team?state.teamGame[p.team]:null; const r=state.rostered[p.key];
-    return `<tr class="${p.inj&&INACTIVE.test(p.inj)?'zero':''}"><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}${tg?' '+oppCell(tg):''}</td><td class="num">${fmt(s.passYds,0)}</td><td class="num">${fmt(s.passTd,2)}</td><td class="num">${fmt(s.ints,2)}</td><td class="num">${fmt(s.rushYds,0)}</td><td class="num">${fmt(s.rec,1)}</td><td class="num">${fmt(s.recYds,0)}</td><td class="num">${pct(s.pAtd)}</td><td class="num">${fmt(s.xTd,2)}</td>${lgs.map(l=>`<td class="num proj">${fmt(p.leaguePts[l.id])}</td>`).join('')}<td>${r?r.map(x=>`<span class="tag on">${esc(x)}</span>`).join(' '):''}</td></tr>`; }).join('');
-  html += `<div class="tbl"><table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div><p class="foot">${rows.length} players with props this week${rows.length>400?' (showing the top 400 — use the filters)':''}. Every player the books list, scored under each league's rules: use it for waivers and streamers, not just your roster.</p>`;
-  return html;
 }
 
 // ============================================================ rendering — settings
@@ -1692,12 +1690,6 @@ function bind(){
     const card = state.cards.find(c => c.kind==='cbs'); if(card) card.scores = state.cbs[w];
     const el = $('#cbsRec'); if(el) el.textContent = cbsRecord();
   });
-  if(state.tab==='board' && state.proj){
-    $('#fPos').onchange = e => { state.board.pos=e.target.value; render(); };
-    $('#fMine').onchange = e => { state.board.mine=e.target.checked; render(); };
-    $('#fQ').oninput = e => { state.board.q=e.target.value; render(); $('#fQ').focus(); $('#fQ').setSelectionRange(1e4,1e4); };
-    document.querySelectorAll('th[data-sort]').forEach(th => th.onclick = () => { const k=th.dataset.sort; if(state.board.sort===k) state.board.dir*=-1; else { state.board.sort=k; state.board.dir = k==='name'||k==='pos'||k==='team' ? 1 : -1; } render(); });
-  }
   if(state.tab==='settings'){
     $('#sSave').onclick = saveSettingsForm;
     $('#sApplyJSON').onclick = () => { try{ const c = JSON.parse($('#sJSON').value); if(!Array.isArray(c.leagues)) throw new Error('leagues must be an array'); state.config = c; saveJSON(LS.config, c); toast('Settings saved from JSON'); refreshScores(); }catch(e){ $('#sMsg').textContent = 'JSON problem: '+e.message; } };
@@ -1727,7 +1719,6 @@ function copyLineup(id){
   state.box = loadJSON(LS.box) || {};
   state.sproj = loadJSON(LS.sproj);
   state.tab = localStorage.getItem(LS.tab);
-  state.board.sort = 'pts:' + (state.config.leagues[0]?.id || '');
   const snap = loadJSON(LS.snap);
   if(snap){ state.cards = snap.cards||[]; state.at = snap.at; state.autoWeek = snap.autoWeek; state.season = snap.season; state.sbIdx = snap.sbIdx||{}; }
   $('#btnPull').onclick = pullLines;
