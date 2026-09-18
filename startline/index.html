@@ -1362,13 +1362,15 @@ function faSection(id, v){
   const mine = new Set(v.entries.map(e => e.key));
   const lr = state.lgRost[id];
   const taken = p => mine.has(p.key) || (lr && (lr.nt.has(p.key+'|'+(p.team||'')) || lr.n.has(p.key)));
-  const pool = Object.values(state.proj).filter(p => !taken(p))
+  // a game that's underway is no pickup — the projection is already part-spent
+  const started = t => { const st = t ? state.sbIdx[t] : null; return st ? st.state!=='pre' : kickedOff(t ? state.teamGame[t] : null); };
+  const pool = Object.values(state.proj).filter(p => !taken(p) && !started(p.team))
     .map(p => ({p, pts: p.leaguePts[id]})).filter(x => x.pts!=null);
   // DST streams: every team with a game this week, scored under this league's DST rule
   if((lg.lineup.DST||0) > 0){
     const dstMine = new Set(v.entries.filter(e => e.pos==='DST' && e.team).map(e => e.team));
     for(const [team, tg] of Object.entries(state.teamGame)){
-      if(dstMine.has(team) || (lr && lr.dst.has(team))) continue;
+      if(dstMine.has(team) || (lr && lr.dst.has(team)) || started(team)) continue;
       const pts = dstPoints(lg.scoring.dst, tg);
       if(pts!=null) pool.push({p:{key:'dst:'+team, name:(TEAMS.find(t=>t[1]===team)||[team])[0], pos:'DST', team, inj:null}, pts});
     }
