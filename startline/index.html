@@ -135,6 +135,7 @@ details[open] summary::before{content:'▾'}
 .tbl tr.close td{background:rgba(255,181,46,.07)}
 .tbl tr.zero td{color:var(--dim)}
 .tbl tr.zero td.name{color:var(--muted)}
+.tbl tr.grp td{border-top:2px solid var(--rule2)}
 .tag{display:inline-block;font-size:11px;font-weight:600;padding:1px 6px;border-radius:2px;background:var(--bg3);color:var(--muted);margin-left:6px;vertical-align:1px}
 .tag.pos{background:transparent;border:1px solid var(--rule2);margin-left:0}
 .tag.inj{background:rgba(255,95,95,.18);color:var(--down)}
@@ -755,9 +756,14 @@ function boxActual(e, lg){
 }
 // League-wide rostered-player sets (every team, not just mine) so the FA pool knows who is taken.
 function rostSet(list){
-  const nt = new Set(), n = new Set();
-  for(const x of list){ if(!x || !x.name) continue; const k = normName(x.name); n.add(k); nt.add(k+'|'+(x.team||'')); }
-  return {at:Date.now(), nt, n};
+  const nt = new Set(), n = new Set(), dst = new Set();
+  for(const x of list){
+    if(!x || !x.name) continue; const k = normName(x.name); n.add(k); nt.add(k+'|'+(x.team||''));
+    // a rostered defense hides that team's DST stream — names vary by platform
+    // ('Tennessee Titans' on Sleeper, 'Titans D/ST' on ESPN, 'Titans DST' on CBS)
+    if(x.team && (/\bd\/?st\b|\bdefense\b/i.test(x.name) || teamAbbr(x.name)===x.team)) dst.add(x.team);
+  }
+  return {at:Date.now(), nt, n, dst};
 }
 async function loadSleeperCard(lg, week){
   const id = lg.leagueId; if(!id) throw new Error('Add the Sleeper league ID in Settings');
@@ -1351,20 +1357,37 @@ function faGap(v, p, pts){
   return low ? {gap: pts-low.pts, vs: low.name} : null;
 }
 function faSection(id, v){
-  if(!state.proj) return `<p class="muted">Pull lines to build the free-agent pool.</p>`;
+  if(!state.proj) return `<p class="muted">Pull lines to build the waiver pool.</p>`;
+  const lg = league(id);
   const mine = new Set(v.entries.map(e => e.key));
   const lr = state.lgRost[id];
-  const pool = Object.values(state.proj)
-    .filter(p => !mine.has(p.key) && !(lr && (lr.nt.has(p.key+'|'+(p.team||'')) || lr.n.has(p.key))))
-    .map(p => ({p, pts: p.leaguePts[id]})).filter(x => x.pts!=null)
-    .sort((a,b) => b.pts-a.pts).slice(0,10);
-  if(!pool.length) return `<p class="muted">Nobody projectable is left on the wire.</p>`;
-  const rows = pool.map(({p,pts}) => {
+  const taken = p => mine.has(p.key) || (lr && (lr.nt.has(p.key+'|'+(p.team||'')) || lr.n.has(p.key)));
+  const pool = Object.values(state.proj).filter(p => !taken(p))
+    .map(p => ({p, pts: p.leaguePts[id]})).filter(x => x.pts!=null);
+  // DST streams: every team with a game this week, scored under this league's DST rule
+  if((lg.lineup.DST||0) > 0){
+    const dstMine = new Set(v.entries.filter(e => e.pos==='DST' && e.team).map(e => e.team));
+    for(const [team, tg] of Object.entries(state.teamGame)){
+      if(dstMine.has(team) || (lr && lr.dst.has(team))) continue;
+      const pts = dstPoints(lg.scoring.dst, tg);
+      if(pts!=null) pool.push({p:{key:'dst:'+team, name:(TEAMS.find(t=>t[1]===team)||[team])[0], pos:'DST', team, inj:null}, pts});
+    }
+  }
+  const ORDER = ['QB','RB','WR','TE','K','DST'].filter(pos =>
+    pos==='DST' ? (lg.lineup.DST||0)>0
+                : Object.keys(lg.lineup).some(s => (lg.lineup[s]||0)>0 && (SLOT_ELIG[s]||[]).includes(pos)));
+  const top = ORDER.flatMap(pos => pool.filter(x => x.p.pos===pos).sort((a,b) => b.pts-a.pts).slice(0,3));
+  if(!top.length) return `<p class="muted">Nobody projectable is left on the wire.</p>`;
+  let last = null;
+  const rows = top.map(({p,pts}) => {
     const g = faGap(v, p, pts); const add = !!g && g.gap>0.05;
     const tg = p.team ? state.teamGame[p.team] : null;
-    return `<tr class="${p.inj&&INACTIVE.test(p.inj)?'zero':''}"><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}${add?' <span class="tag on">ADD?</span>':''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}</td><td>${oppCell(tg)}</td><td class="num proj">${fmt(pts)}</td><td class="num"><span class="gap${add?' close':''}">${g?signed(g.gap)+' vs '+esc(g.vs):'—'}</span></td></tr>`;
+    const cls = [last!==null && p.pos!==last ? 'grp' : '', p.inj&&INACTIVE.test(p.inj) ? 'zero' : ''].filter(Boolean).join(' ');
+    last = p.pos;
+    return `<tr${cls?` class="${cls}"`:''}><td class="name">${esc(p.name)}${p.inj?` <span class="tag inj">${esc(INJ_SHORT[p.inj]||p.inj)}</span>`:''}${add?' <span class="tag on">ADD?</span>':''}</td><td>${esc(p.pos)}${p.posGuess?'?':''}</td><td>${esc(p.team||'?')}</td><td>${oppCell(tg)}</td><td class="num proj">${fmt(pts)}</td><td class="num"><span class="gap${add?' close':''}">${g?signed(g.gap)+' vs '+esc(g.vs):'—'}</span></td></tr>`;
   }).join('');
-  return (lr ? '' : `<p class="muted">League-wide rosters aren't available for this league yet, so some of these may already be owned.</p>`)
+  return `<p class="muted">Top 3 per position by projected points under ${esc(lg.name)} scoring${ORDER.includes('DST')?'; DST rows are streams priced from the implied totals':''}.</p>`
+    + (lr ? '' : `<p class="muted">League-wide rosters aren't available for this league yet, so some of these may already be owned.</p>`)
     + `<div class="tbl"><table><thead><tr><th>Player</th><th>Pos</th><th>Team</th><th>Opp</th><th class="num">Proj</th><th class="num">vs. weakest starter</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
@@ -1399,7 +1422,7 @@ function renderLeagueTab(id){
     v.bench.map(e => `<tr class="${rowClass(e)}${e.gap!=null && e.gap>-1.5?' close':''}">${playerCell(e)}<td>${esc(e.team||'')}</td><td>${oppCell(e.tg)}</td><td class="num proj">${fmt(e.pts)}</td><td class="num"><span class="gap${e.gap!=null&&e.gap>-1.5?' close':''}">${e.gap!=null?signed(e.gap)+' vs '+esc(e.gapVs):'—'}</span></td>${statRow(e)}</tr>`).join('') + `</tbody></table></div>`;
   if(v.taxi.length) html += `<h3>Taxi</h3><p class="muted">${v.taxi.map(e=>esc(e.name)).join(', ')}</p>`;
   if(v.ir.length) html += `<h3>IR</h3><p class="muted">${v.ir.map(e=>esc(e.name)).join(', ')}</p>`;
-  html += `<h2>Free agents</h2>` + faSection(id, v);
+  html += `<h2>Waiver wire</h2>` + faSection(id, v);
   html += `<p class="foot">${esc(lg.note||'')} Projections are market consensus across the books returned: yardage and reception lines shifted by their Over/Under prices, passing-TD and anytime-TD prices converted to expected TDs (Poisson), and each team's TD probabilities scaled down to its implied total to strip the vig. Bench rows within 1.5 pts of a starter are highlighted. DST and any kicker without a kicking-points line are heuristics from implied totals. Once a game starts its players are locked: <b>final</b> rows keep their actual score, <b>live</b> rows show points so far, and swap advice only moves players who haven't kicked off. Leagues without a platform score feed (CBS) settle from the NFL box score — TDs, kicker points, and def/ST return TDs.</p>`;
   return html;
 }
