@@ -107,6 +107,7 @@ details[open] summary::before{content:'▾'}
 .card .duel td.pl .n{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
 .card .duel td.pl .g{color:var(--dim);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:29vw}
 .card .duel td.pl .g.live{color:var(--accent)}
+.card .duel td.pl.wait .n{color:var(--muted)}
 .card .duel td.pl.op{text-align:right}
 @media (min-width:700px){ .sc{font-size:46px} .card .duel td.pl .n,.card .duel td.pl .g{max-width:none} }
 .cbs .side input{font:inherit;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:44px;line-height:.95;width:96px;text-align:right;background:var(--bg3);border:1px solid var(--rule2);border-radius:8px;color:var(--text);padding:2px 8px}
@@ -841,6 +842,11 @@ async function loadCbsCard(lg, week){
     if(!ls || !Array.isArray(ls.teams)) throw new Error('no live scoring in the CBS response');
     const mine = ls.teams.find(t => String(t.id)===String(ls.my_team_id));
     if(!mine) throw new Error('logged-in team not found in the CBS feed');
+    // Mid-week this feed still carries LAST week's matchup (no week param on the endpoint;
+    // it self-reports its week as `period`). Until CBS rolls over, the card plays pregame:
+    // stale points zero out below so the new week's projections take over.
+    const cbsWeek = Number(ls.period) || null;
+    const stale = !!(cbsWeek && cbsWeek < week);
     const mu = (mine.matchups||[])[0] || {};
     const oppT = ls.teams.find(t => String(t.id)===String(mu.opponent_team_id)) || null;
     const side = t => ({
@@ -859,10 +865,20 @@ async function loadCbsCard(lg, week){
     card.me = side(mine);
     card.opp = oppT ? side(oppT)
              : mu.opponent_team ? {name:mu.opponent_team, record:'', points:Number(mu.opponent_pts)||0, projected:null, starters:[]} : null;
+    if(stale){
+      card.stale = cbsWeek;
+      for(const s of [card.me, card.opp]){ if(!s) continue;
+        s.points = 0;
+        for(const p of s.starters||[]) p.pts = 0;
+        for(const p of s.bench||[]) p.pts = null;
+      }
+      const schedOpp = (lg.schedule||{})[week];
+      if(schedOpp && card.opp){ card.opp.name = schedOpp; card.opp.record = ''; }
+    }
     state.live[lg.id] = {at:Date.now(), kind:'cbs', entries: (mine.players||[]).map(p => ({
       name: p.fullname || `${p.firstname||''} ${p.lastname||''}`.trim(), pos: p.position||'',
       team: normAbbr(p.pro_team), slot: p.roster_pos==='RB-WR-TE' ? 'FLEX' : (p.roster_pos||null),
-      starter: p.status==='Active', pts: p.fpts!=null ? Number(p.fpts) : null,
+      starter: p.status==='Active', pts: stale || p.fpts==null ? null : Number(p.fpts),
     }))};
     state.lgRost[lg.id] = rostSet(ls.teams.flatMap(t => (t.players||[]).map(p => ({name: p.fullname || `${p.firstname||''} ${p.lastname||''}`.trim(), team: normAbbr(p.pro_team)}))));
   }catch(e){ card.liveErr = e.message; }
@@ -1018,6 +1034,22 @@ function buildView(lg){
   } else {
     ({lineup, bench} = optimizeLineup(eligible, lg.lineup));
   }
+  // Slots the optimizer left short still show the roster's own player for the spot (early-week
+  // kickers with nothing priced yet, mostly) — pending, not missing.
+  for(const s of SLOT_ORDER){
+    const want = lg.lineup[s]||0; if(!want) continue;
+    while(lineup.filter(x => x.slot===s && x.player).length < want){
+      let bi = bench.findIndex(e => e.starter && e.pts==null && (!e.gs || e.gs==='pre') && (SLOT_ELIG[s]||[]).includes(e.pos));
+      if(bi<0) bi = bench.findIndex(e => e.pts==null && (!e.gs || e.gs==='pre') && (SLOT_ELIG[s]||[]).includes(e.pos));
+      if(bi<0) break;
+      const e = bench.splice(bi,1)[0];
+      const empty = lineup.find(x => x.slot===s && !x.player);
+      if(empty) empty.player = e;
+      else lineup.push({slot:s, label: want>1 ? s+(lineup.filter(x=>x.slot===s).length+1) : s, player:e, locked:false});
+    }
+  }
+  for(const x of lineup) if(x.player && x.player.pts==null && x.player.gs!=='post')
+    x.player.flags = [...(x.player.flags||[]).filter(f => f!=='no line'), 'lines pending'];
   const optPts = lineup.reduce((s,x) => s + (x.player?.pts||0), 0);
   let cur = null;
   if(current){
@@ -1061,6 +1093,39 @@ function projectedFinal(side, lg){
   }
   if(resolved < pending/2) return null;     // lines cover too few of the remaining starters — keep the platform's own number
   return total;
+}
+// Starters still to play whose remaining points the lines can't price yet.
+function pendingNoLine(side, lg){
+  let n = 0;
+  for(const s of (side?.starters)||[]){
+    const st = s.team ? state.sbIdx[s.team] : null;
+    const gs = st ? st.state : null;
+    if(gs!=='pre' && gs!=='in') continue;
+    if(starterProj(s, lg)==null) n++;
+  }
+  return n;
+}
+// Rough win odds from the same machinery: each side's final ≈ projected final, spread by what's
+// still on the field (sd per pending starter = 75% of his remaining projection, floor 3).
+// Logistic approximation of the normal CDF. A read on the matchup, not a betting price.
+function winProb(c, lg){
+  if(!c.me || !c.opp || !lg || !state.proj) return null;
+  const me = c.me.projected ?? (Number(c.me.points)||0), op = c.opp.projected ?? (Number(c.opp.points)||0);
+  let v = 0, pending = 0;
+  for(const side of [c.me, c.opp]){
+    for(const s of side.starters||[]){
+      const st = s.team ? state.sbIdx[s.team] : null;
+      const gs = st ? st.state : null;
+      if(gs!=='pre' && gs!=='in') continue;
+      pending++;
+      const pr = starterProj(s, lg);
+      const rem = pr==null ? 6 : gs==='pre' ? pr : Math.max(pr - (Number(s.pts)||0), 0);
+      const sd = Math.max(3, .75*rem);
+      v += sd*sd;
+    }
+  }
+  if(!pending || !(v>0)) return me===op ? .5 : me>op ? 1 : 0;
+  return 1/(1+Math.exp(-1.702*(me-op)/Math.sqrt(v)));
 }
 // CBS has no score feed, so the "you" side of that card is the sum of your starters as the NFL
 // box scores settle them; once every starter is final the number is stored so the record works.
@@ -1169,16 +1234,20 @@ function render(){
 function duelCell(p, right, lg){
   if(!p) return right ? `<td class="pts op"></td><td class="pl op"></td>` : `<td class="pl"></td><td class="pts"></td>`;
   const st = p.team ? state.sbIdx[p.team] : null; const gl = gameLine(st?.game, p.team);
-  const info = `<div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div>`;
-  // hasn't kicked off yet and no points on the board → show the Vegas-line projection, styled apart
+  const gs = st ? st.state : null;
+  // one glance = one state: dim name + italic projection (or —) before kickoff,
+  // gold while the game runs, bright roman once the points are banked
+  const waiting = gs!=='in' && gs!=='post' && !(p.pts>0);
   let val = p.pts, cls = p.pts ? '' : ' zero';
-  if(st?.state==='in') cls += ' lv';
-  if(lg && state.proj && st?.state==='pre' && !(p.pts>0)){
-    const pr = starterProj(p, lg);
-    if(pr!=null){ val = pr; cls = ' pp'; }
+  if(gs==='in') cls += ' lv';
+  if(waiting){
+    const pr = lg && state.proj ? starterProj(p, lg) : null;
+    if(pr!=null){ val = pr; cls = ' pp'; } else { val = null; cls = ' zero'; }
   }
+  const info = `<div class="n">${esc(p.name)}</div><div class="g ${gl.cls}">${esc(p.team||'')} ${esc(gl.text)}</div>`;
   const pts = `<td class="pts${right?' op':''}${cls}">${fmt(val)}</td>`;
-  return right ? pts + `<td class="pl op">${info}</td>` : `<td class="pl">${info}</td>` + pts;
+  const pl = `<td class="pl${right?' op':''}${waiting?' wait':''}">${info}</td>`;
+  return right ? pts + pl : pl + pts;
 }
 function duelRows(A, B, lg){
   const n = Math.max(A?.length||0, B?.length||0); let rows='';
@@ -1190,6 +1259,10 @@ function matchupHTML(c, status){
   const lg = league(c.id);
   const fin = status.cls==='final' || c.winner==='HOME' || c.winner==='AWAY';
   const useProj = !fin && (c.me?.projected!=null || c.opp?.projected!=null);
+  const wp = useProj ? winProb(c, lg) : null;
+  const wpTxt = wp==null ? '' : ` · win ${wp>0.99?'>99':wp<0.01?'<1':Math.round(wp*100)}%`;
+  const miss = !fin && lg && state.proj ? pendingNoLine(c.me, lg) + pendingNoLine(c.opp, lg) : 0;
+  const missTxt = miss ? ` · <span class="warn">${miss} w/o lines</span>` : '';
   const scls = (s,o) => { if(!s || !o) return '';
     if(fin) return s.points>o.points ? 'won' : s.points<o.points ? 'lost' : '';
     return s.points>=o.points ? 'ahead' : 'behind'; };
@@ -1197,7 +1270,7 @@ function matchupHTML(c, status){
   const sub = s => { if(!s || !(s.starters||[]).length) return '';
     const lc = leftCount(s.starters, state.sbIdx);
     return lc.left===0 ? 'done' : `${lc.left} left${lc.live?`, ${lc.live} live`:''}`; };
-  let h = `<div class="vs">${tm(c.me,false)}<div class="mid"><div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(c.me.points)}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(c.opp.points):'—'}</span></div>${useProj?`<div class="now">proj ${fmt(c.me.projected??c.me.points)} – ${c.opp?fmt(c.opp.projected??c.opp.points):'—'}</div>`:''}</div>${tm(c.opp,true)}</div>`;
+  let h = `<div class="vs">${tm(c.me,false)}<div class="mid"><div class="bigs"><span class="sc ${scls(c.me,c.opp)}">${fmt(c.me.points)}</span><span class="dash">–</span><span class="sc ${scls(c.opp,c.me)}">${c.opp?fmt(c.opp.points):'—'}</span></div>${useProj?`<div class="now">proj ${fmt(c.me.projected??c.me.points)} – ${c.opp?fmt(c.opp.projected??c.opp.points):'—'}${wpTxt}${missTxt}</div>`:''}</div>${tm(c.opp,true)}</div>`;
   h += `<div class="subvs"><span>${sub(c.me)}</span><span>${sub(c.opp)}</span></div>`;
   h += `<table class="duel"><tbody>${duelRows(c.me.starters||[], c.opp?.starters||[], lg)}</tbody></table>`;
   const bn = c.me.bench||[], bo = c.opp?.bench||[];
@@ -1226,6 +1299,7 @@ function renderCard(c){
       const status = cardStatus([c.me, c.opp], state.sbIdx);
       const pill = status.label ? `<span class="pill ${status.cls}">${status.label}</span>` : '';
       return `<article class="card cbs"${accStyle(c)}><div class="head"><h2>${esc(c.name)}</h2><span class="plat">CBS</span>${pill}</div>`
+        + (c.stale ? `<p class="note"><span class="warn">CBS still shows week ${esc(c.stale)}</span> — last week's points are hidden until CBS rolls over (midweek). Below is week ${esc(c.week)} as projected.</p>` : '')
         + matchupHTML(c, status)
         + `<div class="row">${c.url?`<a href="${esc(c.url)}" target="_blank" rel="noopener">Open CBS</a>`:''}<span>Scores and rosters sync live from CBS.</span></div></article>`;
     }
@@ -1244,7 +1318,7 @@ function renderCard(c){
 function renderWeek(){
   if(!state.cards.length) return `<div class="cards"><article class="card"><p class="note">Nothing loaded yet. Tap <b>Refresh scores</b>. Sleeper works as is; the ESPN card needs the worker URL and league ID in Settings.</p></article></div>`;
   return `<div class="cards">${state.cards.map(renderCard).join('')}</div>`
-    + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in; without lines the platform's own projection is shown.</p>`;
+    + `<p class="foot">Projected final = points so far + every starter still to play, at the Vegas-line projection. Pull lines to fill it in; without lines the platform's own projection is shown. Win % is a rough read on the spread of remaining outcomes, not a betting price.</p>`;
 }
 
 // ============================================================ rendering — league start/sit
@@ -1309,6 +1383,9 @@ function renderLeagueTab(id){
     else head += `<p class="up">Your current lineup already matches the optimal one.</p>`;
   } else if(lg.platform==='cbs') head += `<p class="muted">Put * before your current starters in Settings to see swap suggestions.</p>`;
   head += `</div><div><button class="small" data-copy="${esc(id)}">Copy lineup as text</button></div></div>`;
+  const pend = v.lineup.filter(x => x.player && x.player.gs!=='post' && x.player.pts==null).length;
+  const part = v.lineup.filter(x => x.player && x.player.pts!=null && x.player.gs==='pre' && (x.player.flags||[]).some(f => f!=='no game this week' && /^no /.test(f))).length;
+  if(pend || part) head += `<p class="warn">Lines incomplete: ${pend?pend+' starter'+(pend===1?'':'s')+' without lines':''}${pend&&part?', ':''}${part?part+' partially priced':''} — projected totals run low until the books post more.</p>`;
   if(v.notes.length) head += v.notes.map(n => `<p class="warn">${esc(n)}</p>`).join('');
   const rows = v.lineup.map(x => {
     if(!x.player) return `<tr><td class="slot">${x.label}</td><td class="name muted">No eligible player</td><td></td><td></td><td class="num">—</td><td class="num proj">—</td>${STAT_HEAD.replace(/<th[^>]*>.*?<\/th>/g,'<td class="num">—</td>')}</tr>`;
