@@ -1476,14 +1476,26 @@ function renderWeek(){
   if(!state.cards.length) return `<div class="cards"><article class="card"><p class="note">Nothing loaded yet. Tap <b>Refresh scores</b>. Sleeper works as is; the ESPN card needs the worker URL and league ID in Settings.</p></article></div>`;
   let strip = '';
   if(state.cache){
-    // my starters by team, deduped across leagues — a started game's tile shows who of mine is in it
-    const mine = {}, seenMine = new Set();
+    // my starters and my opponents' starters by team, deduped across leagues — a started
+    // game's tile shows everyone with a stake in it (mine wins if a player is somehow both)
+    const mine = {}, opps = {}, seenMine = new Set();
+    const cardAcc = c => ACCENT[c.kind==='cbs' ? 'cbs' : (league(c.id)?.platform||'').toLowerCase()] || 'inherit';
     for(const c of state.cards){
       if(c.kind!=='league' && c.kind!=='cbs') continue;
+      const acc = cardAcc(c);
       for(const s of (c.me && c.me.starters)||[]){
         if(!s.team || !s.name) continue;
         const k = normName(s.name)+'|'+s.team; if(seenMine.has(k)) continue; seenMine.add(k);
-        (mine[s.team] ||= []).push(s.name.split(' ').pop());
+        (mine[s.team] ||= []).push({n: s.name.split(' ').pop(), a: acc});
+      }
+    }
+    for(const c of state.cards){
+      if(c.kind!=='league' && c.kind!=='cbs') continue;
+      const acc = cardAcc(c);
+      for(const s of (c.opp && c.opp.starters)||[]){
+        if(!s.team || !s.name) continue;
+        const k = normName(s.name)+'|'+s.team; if(seenMine.has(k)) continue; seenMine.add(k);
+        (opps[s.team] ||= []).push({n: s.name.split(' ').pop(), a: acc});
       }
     }
     const games = Object.values(state.cache.games).sort((x,y) => Date.parse(x.commence)-Date.parse(y.commence));
@@ -1498,9 +1510,11 @@ function renderWeek(){
         const h = sg.teams.find(t=>t.abbr===g.home), a = sg.teams.find(t=>t.abbr===g.away);
         const score = h && a ? `${a.abbr} ${a.score} – ${h.abbr} ${h.score}` : '';
         const my = [...(mine[g.away]||[]), ...(mine[g.home]||[])];
+        const op = [...(opps[g.away]||[]), ...(opps[g.home]||[])];
+        const seg = (label, arr) => `${label} ${arr.slice(0,3).map(x => `<span style="color:${x.a}">${esc(x.n)}</span>`).join(', ')}${arr.length>3 ? ' +'+(arr.length-3) : ''}`;
         l1 = st.state==='in' ? `<span class="warn">${esc(sg.detail||'live')}</span>` : 'Final';
         l2 = `<b>${esc(score)}</b>`;
-        l3 = my.length ? `yours: ${my.slice(0,3).map(esc).join(', ')}${my.length>3 ? ' +'+(my.length-3) : ''}` : '—';
+        l3 = my.length || op.length ? [my.length?seg('yours:',my):'', op.length?seg('opp:',op):''].filter(Boolean).join(' · ') : '—';
       }
       return `<div class="game"><b>${g.away} @ ${g.home}</b> ${l1}${g.stale?' <span class="tag">earlier pull</span>':''}<br>${l2}<br>${l3}</div>`;
     }).join('') + `</div>`;
