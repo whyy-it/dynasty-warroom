@@ -597,7 +597,7 @@ const state = {
   week:null, autoWeek:null, season:null, credits:null,
   proj:null, sproj:null, teamGame:{}, views:{}, rostered:{}, lgRost:{},
   tab:null, board:{pos:'ALL', mine:false, q:'', sort:null, dir:-1},
-  busy:false, busyMsg:'', error:null, at:null, timer:null,
+  busy:false, busyMsg:'', error:null, at:null, timer:null, deckX:0,
 };
 
 const $ = s => document.querySelector(s);
@@ -1307,12 +1307,24 @@ function renderTabs(){
 function render(){
   renderStatus(); renderTabs();
   const m = $('#main'); const t = state.tab;
+  // A refresh should never move the reader: remember which deck card he's on, his scroll,
+  // and any bench he toggled — and never rebuild Settings under a field he's typing in.
+  const same = m.dataset.tab === t;
+  const oldDeck = m.querySelector('.cards');
+  if(oldDeck && m.dataset.tab==='week') state.deckX = oldDeck.scrollLeft;
+  const winY = window.scrollY;
+  const benches = same ? [...m.querySelectorAll('details.benchd')].map(d => d.open) : null;
+  if(t==='settings' && same && m.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
+  m.dataset.tab = t;
   m.classList.toggle('wide', t!=='week');
   if(t==='week') m.innerHTML = renderWeek();
   else if(t==='board') m.innerHTML = renderBoard();
   else if(t==='settings') m.innerHTML = renderSettings();
   else m.innerHTML = renderLeagueTab(t);
   bind();
+  if(t==='week' && state.deckX){ const deck = m.querySelector('.cards'); if(deck) deck.scrollLeft = state.deckX; }
+  if(benches){ const nb = [...m.querySelectorAll('details.benchd')]; benches.forEach((o,i) => { if(nb[i]) nb[i].open = o; }); }
+  if(same && winY) window.scrollTo(0, winY);
 }
 
 // ============================================================ rendering — matchup cards
